@@ -171,6 +171,30 @@ export class Engine {
     // stays trading-disabled until the next scan cycle's reconciliation succeeds.
     log.info('Running startup reconciliation');
     for (const entity of this.entityManager.getAllEntities()) {
+      // 2026-04-10: unconditional startup invariant — after the ratio removal,
+      // trading_balance is always equal to cash_balance and reserve_balance is
+      // always 0. This normalizes any stale stored values (from the old ratio
+      // semantics) on every restart, idempotent afterward. Runs BEFORE the
+      // wallet sync / reconciliation so everything downstream sees consistent
+      // state regardless of entity mode (live, paper, or unprovisioned).
+      if (entity.trading_balance !== entity.cash_balance || entity.reserve_balance !== 0) {
+        log.info(
+          {
+            entity: entity.config.slug,
+            old_trading: entity.trading_balance,
+            old_reserve: entity.reserve_balance,
+            cash: entity.cash_balance,
+          },
+          'Normalizing trading_balance = cash_balance, reserve_balance = 0',
+        );
+        this.entityManager.updateBalances(
+          entity.config.slug,
+          entity.cash_balance,
+          0,
+          entity.cash_balance,
+        );
+      }
+
       // Use proxy_address when present (CLOB-proxied wallets), else fall back to
       // account_address (direct-EOA wallets like polybot). The Data API /positions
       // endpoint accepts either.
