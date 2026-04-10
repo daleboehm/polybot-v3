@@ -319,7 +319,12 @@ LEFT JOIN (
     SELECT entity_slug,
            SUM(realized_pnl) AS total_realized_pnl,
            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS total_wins,
-           SUM(CASE WHEN realized_pnl <= 0 THEN 1 ELSE 0 END) AS total_losses
+           -- 2026-04-10: changed <= 0 to < 0 (strict). A realized_pnl of exactly 0
+           -- is a push, not a loss. This also excludes the accounting-neutral
+           -- placeholder rows written by the reconciler for close_absent cases
+           -- where the market is not yet resolved — those get payout=cost_basis,
+           -- realized_pnl=0 so they stay in the history table without polluting W/L.
+           SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS total_losses
     FROM resolutions
     GROUP BY entity_slug
 ) r ON e.slug = r.entity_slug
@@ -371,8 +376,12 @@ SELECT
     COALESCE(r.total_resolutions, 0) AS total_resolutions,
     COALESCE(r.wins, 0) AS wins,
     COALESCE(r.losses, 0) AS losses,
-    CASE WHEN COALESCE(r.total_resolutions, 0) > 0
-         THEN ROUND(100.0 * r.wins / r.total_resolutions, 1)
+    -- 2026-04-10: divide wins by (wins + losses), NOT by total_resolutions.
+    -- total_resolutions includes pushes (realized_pnl = 0, accounting-neutral
+    -- placeholder rows from the reconciler's close_absent fallback). Including
+    -- them in the denominator would artificially suppress win rate.
+    CASE WHEN COALESCE(r.wins, 0) + COALESCE(r.losses, 0) > 0
+         THEN ROUND(100.0 * r.wins / (r.wins + r.losses), 1)
          ELSE 0.0 END AS win_rate,
     COALESCE(r.total_pnl, 0) AS total_pnl,
     COALESCE(r.avg_pnl_per_trade, 0) AS avg_pnl_per_trade,
@@ -393,7 +402,8 @@ LEFT JOIN (
     SELECT strategy_id, COALESCE(sub_strategy_id, '') AS sub_strategy_id, entity_slug,
            COUNT(*) AS total_resolutions,
            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
-           SUM(CASE WHEN realized_pnl <= 0 THEN 1 ELSE 0 END) AS losses,
+           -- 2026-04-10: strict < 0 (see v_entity_pnl above for rationale).
+           SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS losses,
            SUM(realized_pnl) AS total_pnl,
            AVG(realized_pnl) AS avg_pnl_per_trade,
            MAX(realized_pnl) AS best_trade,
@@ -434,17 +444,30 @@ export function applySchema(db: Database.Database): void {
     }
   }
 
-  // Recreate v_strategy_performance view (it may reference old schema)
+  // Force-recreate views on every startup so edits to the DDL take effect.
+  // CREATE VIEW IF NOT EXISTS is a no-op when the view already exists, so any
+  // change to the SQL below would silently not apply without this drop step.
+  // 2026-04-10: added v_entity_pnl to the recreate set (W/L and win-rate fix).
   try {
     db.exec('DROP VIEW IF EXISTS v_strategy_performance');
-    // Re-execute just the view portion of DDL
-    const viewDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_performance[\s\S]*?ORDER BY COALESCE\(s\.total_trades, 0\) DESC;/);
-    if (viewDdl) {
-      db.exec(viewDdl[0]);
+    const stratDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_performance[\s\S]*?ORDER BY COALESCE\(s\.total_trades, 0\) DESC;/);
+    if (stratDdl) {
+      db.exec(stratDdl[0]);
       log.info('v_strategy_performance view recreated');
     }
   } catch (err) {
-    log.warn({ err }, 'View recreation failed');
+    log.warn({ err }, 'v_strategy_performance recreation failed');
+  }
+
+  try {
+    db.exec('DROP VIEW IF EXISTS v_entity_pnl');
+    const entityDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_entity_pnl[\s\S]*?\) p ON e\.slug = p\.entity_slug;/);
+    if (entityDdl) {
+      db.exec(entityDdl[0]);
+      log.info('v_entity_pnl view recreated');
+    }
+  } catch (err) {
+    log.warn({ err }, 'v_entity_pnl recreation failed');
   }
 
   // Record schema version
