@@ -11,15 +11,17 @@ const tieredStopSchema = z.object({
 const riskLimitsSchema = z.object({
   max_position_pct: z.number().min(0).max(1).default(0.10),
   max_position_usd: z.number().min(0).default(20),
-  max_positions: z.number().int().min(1).default(40),
+  // 2026-04-10: removed max_positions, reserve_ratio, trading_ratio.
+  // Dale's directive: "the only limit should be cash. No limit on positions,
+  // no reserve." Trading balance is now always equal to cash balance.
+  // When reserves come back, it'll be via the central-node sweep pattern,
+  // not these knobs — this is a clean slate.
   max_open_orders: z.number().int().min(1).default(5),
   fractional_kelly: z.number().min(0).max(1).default(0.25),
   daily_loss_lockout_usd: z.number().min(0).default(20),
   stop_loss_pct: z.number().min(0).max(1).default(0.20),
   hard_stop_usd: z.number().positive().default(5),
   profit_target_pct: z.number().min(0).default(0.40),
-  reserve_ratio: z.number().min(0).max(1).default(0.60),
-  trading_ratio: z.number().min(0).max(1).default(0.40),
   min_edge_threshold: z.number().min(0).default(0.02),
   min_hold_hours: z.number().min(0).default(6),
   // Dale 2026-04-10: global short-horizon filter. Only take positions that

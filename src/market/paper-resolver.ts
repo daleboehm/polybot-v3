@@ -67,7 +67,6 @@ export class PaperResolver {
   constructor(
     private readonly entityManager: EntityManager,
     private readonly dailyLossGuard: DailyLossGuard,
-    private readonly tradingRatio: number,
   ) {}
 
   async check(): Promise<PaperResolutionResult> {
@@ -181,7 +180,7 @@ export class PaperResolver {
             pos.entity_slug,
             newCash,
             entity.reserve_balance,
-            newCash * this.tradingRatio,
+            newCash, // trading_balance == cash (2026-04-10, ratio removed)
           );
         }
 

@@ -14,8 +14,9 @@ risk:
   stop_loss_pct: 0.20             # -20%
   hard_stop_usd: 5.00
   profit_target_pct: 0.40         # +40%
-  reserve_ratio: 0.60
-  trading_ratio: 0.40
+  # 2026-04-10: reserve_ratio / trading_ratio / max_positions removed from schema.
+  # Dale's directive: "only limit is cash, no reserve." Trading balance == cash.
+  # When reserves come back, it'll be via the central-node sweep pattern.
   min_edge_threshold: 0.02        # 2% minimum edge
   min_hold_hours: 6
   # Dale 2026-04-10: prod must NOT buy anything that resolves past 48 hours.

@@ -8,11 +8,10 @@ engine:
   log_level: info
 
 risk:
-  max_positions: 100000            # Dale 2026-04-10: "no limits on positions" — R&D's goal is
-                                   # resolution-data coverage across every strategy & sub-strategy.
-                                   # Natural cash constraint (max_position_usd × open_count ≤ cash)
-                                   # is the only real limit now. With $10K paper and $10 positions,
-                                   # R&D can hold up to ~1000 positions concurrently.
+  # 2026-04-10: max_positions / reserve_ratio / trading_ratio removed from schema.
+  # "Only limit is cash." Sizing self-bounds via Kelly + max_position_pct +
+  # max_position_usd. When reserves come back, it'll be via the central-node
+  # sweep pattern, not these knobs.
   max_position_pct: 0.05           # 5% per position — still enforced as a Kelly hard ceiling
   max_position_usd: 10.00          # Smaller paper positions for broader coverage. $10K / $10 = 1000
                                    # slots, enough room for every sub-strategy to accumulate data
@@ -22,8 +21,6 @@ risk:
   stop_loss_pct: 0.20
   hard_stop_usd: 25.00
   profit_target_pct: 0.40
-  reserve_ratio: 0.0
-  trading_ratio: 1.0
   min_edge_threshold: 0.02
   min_hold_hours: 2
   min_hours_to_resolve: 1          # Dale 2026-04-10: only short-horizon positions to keep the

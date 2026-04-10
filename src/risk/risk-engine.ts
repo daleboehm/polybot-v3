@@ -3,7 +3,6 @@
 import type { Signal, RiskCheck, RiskViolation, RiskLimits, EntityState, StrategyDecision, OrderRequest } from '../types/index.js';
 import { calculatePositionSize } from './position-sizer.js';
 import { StrategyWeighter } from './strategy-weighter.js';
-import { getOpenPositionCount } from '../storage/repositories/position-repo.js';
 import { getOpenOrders } from '../storage/repositories/order-repo.js';
 import { insertSignal } from '../storage/repositories/signal-repo.js';
 import { eventBus } from '../core/event-bus.js';
@@ -77,17 +76,11 @@ export class RiskEngine {
       });
     }
 
-    // Check: max open positions — exits bypass (exits REDUCE position count).
-    const openPositions = getOpenPositionCount(entity.config.slug);
-    if (!isExit && openPositions >= this.limits.max_positions) {
-      violations.push({
-        rule: 'max_positions',
-        message: `${openPositions} open positions (max ${this.limits.max_positions})`,
-        severity: 'block',
-        current_value: openPositions,
-        limit_value: this.limits.max_positions,
-      });
-    }
+    // 2026-04-10: max_positions count cap removed per Dale's directive —
+    // "the only limit should be cash." Sizing now self-bounds via Kelly +
+    // max_position_pct + max_position_usd, and the engine will refuse to open
+    // a position when trading_balance < signal's minimum size. That's the
+    // binding constraint we want, not an arbitrary count.
 
     // Check: max concurrent open orders (configurable via risk.max_open_orders)
     const openOrders = getOpenOrders(entity.config.slug);

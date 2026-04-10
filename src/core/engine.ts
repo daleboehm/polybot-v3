@@ -101,7 +101,6 @@ export class Engine {
     this.paperResolver = new PaperResolver(
       this.entityManager,
       this.dailyLossGuard,
-      config.risk.trading_ratio,
     );
     this.portfolioRisk = new PortfolioRiskTracker();
     this.regimeDetector = new RegimeDetector();
@@ -207,7 +206,7 @@ export class Engine {
               entity.config.slug,
               onChainUsdc,
               entity.reserve_balance,
-              onChainUsdc * this.config.risk.trading_ratio,
+              onChainUsdc, // trading_balance == cash (2026-04-10, ratio removed)
             );
           }
         }
@@ -236,7 +235,7 @@ export class Engine {
             entity.config.slug,
             newCash,
             entity.reserve_balance,
-            newCash * this.config.risk.trading_ratio,
+            newCash, // trading_balance == cash (2026-04-10, ratio removed)
           );
           log.info(
             { entity: entity.config.slug, credited: result.cashCredited.toFixed(2), new_cash: newCash.toFixed(2) },
@@ -390,7 +389,7 @@ export class Engine {
             entity.config.slug,
             newCash,
             entity.reserve_balance,
-            newCash * this.config.risk.trading_ratio,
+            newCash, // trading_balance == cash (2026-04-10, ratio removed)
           );
           this.dailyLossGuard.recordPnl(entity.config.slug, result.cashCredited);
         }
@@ -580,7 +579,7 @@ export class Engine {
                     entity.config.slug,
                     newCash,
                     entity.reserve_balance,
-                    newCash * this.config.risk.trading_ratio,
+                    newCash, // trading_balance == cash (2026-04-10, ratio removed)
                   );
                 } else {
                   // SELL: credit proceeds to cash
@@ -589,7 +588,7 @@ export class Engine {
                     entity.config.slug,
                     newCash,
                     entity.reserve_balance,
-                    newCash * this.config.risk.trading_ratio,
+                    newCash, // trading_balance == cash (2026-04-10, ratio removed)
                   );
                   this.dailyLossGuard.recordPnl(entity.config.slug, fill.net_usdc);
                 }
@@ -688,7 +687,7 @@ export class Engine {
         entity.config.slug,
         newCash,
         entity.reserve_balance,
-        newCash * this.config.risk.trading_ratio,
+        newCash, // trading_balance == cash (2026-04-10, ratio removed)
       );
       // Record realized P&L (difference between proceeds and cost basis)
       const realizedPnl = fill.net_usdc - pos.cost_basis;
