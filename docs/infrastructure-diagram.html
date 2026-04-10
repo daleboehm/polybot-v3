@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gemini Capital — Infrastructure Architecture</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0B1120; color: #E2E8F0; padding: 24px; }
+.container { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 22px; color: #F8FAFC; margin-bottom: 4px; }
+.subtitle { color: #94A3B8; font-size: 13px; margin-bottom: 24px; }
+.section { background: #1E293B; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+.section h2 { font-size: 15px; color: #F8FAFC; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid #334155; }
+svg { width: 100%; height: auto; }
+.node { cursor: default; }
+.node rect { rx: 6; ry: 6; }
+.node text { font-family: -apple-system, sans-serif; }
+.edge { stroke: #475569; stroke-width: 1.5; fill: none; }
+.edge-highlight { stroke: #0EA5E9; stroke-width: 2; }
+.label { font-size: 11px; fill: #94A3B8; }
+.port-badge { font-size: 10px; font-family: 'SF Mono', 'Fira Code', monospace; }
+.legend { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #94A3B8; }
+.legend-color { width: 12px; height: 12px; border-radius: 3px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+th { text-align: left; color: #94A3B8; padding: 6px 10px; border-bottom: 1px solid #334155; font-weight: 500; }
+td { padding: 6px 10px; border-bottom: 1px solid #1E293B; }
+td code { background: #0F172A; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #0EA5E9; }
+.status-active { color: #10B981; }
+.status-pending { color: #F59E0B; }
+.footer { color: #64748B; font-size: 11px; margin-top: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Gemini Capital — Infrastructure Architecture</h1>
+<p class="subtitle">VPS: 178.62.225.235 (DigitalOcean AMS3) | Updated: 2026-03-30</p>
+
+<div class="section">
+<h2>Network Architecture</h2>
+<svg viewBox="0 0 1100 680" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background grid -->
+  <defs>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#1E293B" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="1100" height="680" fill="url(#grid)"/>
+
+  <!-- Internet / User -->
+  <rect x="440" y="10" width="220" height="50" fill="#0F172A" stroke="#475569" stroke-width="1.5" rx="8"/>
+  <text x="550" y="32" text-anchor="middle" fill="#F8FAFC" font-size="13" font-weight="600">Internet / Browser</text>
+  <text x="550" y="48" text-anchor="middle" fill="#94A3B8" font-size="11">https://geminicap.net</text>
+
+  <!-- Arrow down -->
+  <line x1="550" y1="60" x2="550" y2="90" class="edge-highlight" marker-end="url(#arrow)"/>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0EA5E9"/></marker></defs>
+
+  <!-- Nginx + SSL -->
+  <rect x="380" y="90" width="340" height="60" fill="#1E3A5F" stroke="#0EA5E9" stroke-width="2" rx="8"/>
+  <text x="550" y="112" text-anchor="middle" fill="#F8FAFC" font-size="14" font-weight="600">Nginx Reverse Proxy + SSL</text>
+  <text x="550" y="130" text-anchor="middle" fill="#7DD3FC" font-size="11">Port 443 (HTTPS) | SSO Auth | Let's Encrypt</text>
+  <text x="550" y="144" text-anchor="middle" fill="#94A3B8" font-size="10">sub_filter URL rewriting per entity</text>
+
+  <!-- UFW Firewall band -->
+  <rect x="30" y="168" width="1040" height="24" fill="#7F1D1D" rx="4" opacity="0.4"/>
+  <text x="550" y="184" text-anchor="middle" fill="#FCA5A5" font-size="11" font-weight="500">UFW Firewall — Only ports 80, 443, 2222 exposed | Dashboard ports (8080-8090, 9090) localhost-only</text>
+
+  <!-- Master Dashboard -->
+  <rect x="420" y="205" width="260" height="50" fill="#1A1A2E" stroke="#A855F7" stroke-width="1.5" rx="6"/>
+  <text x="550" y="225" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="600">Master Aggregator Dashboard</text>
+  <text x="550" y="242" text-anchor="middle" fill="#C084FC" font-size="11">Port 9090 | /</text>
+  <line x1="550" y1="150" x2="550" y2="205" class="edge-highlight" marker-end="url(#arrow)"/>
+
+  <!-- Entity Dashboards - Row 1 (ports 8080-8085) -->
+  <g transform="translate(0, 275)">
+    <!-- Caspian -->
+    <rect x="30" y="0" width="155" height="55" fill="#0F172A" stroke="#4A7FB5" stroke-width="1.5" rx="5"/>
+    <text x="108" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Caspian</text>
+    <text x="108" y="32" text-anchor="middle" fill="#7DD3FC" font-size="10">Port 8080</text>
+    <text x="108" y="44" text-anchor="middle" class="status-active" font-size="10">● ACTIVE</text>
+
+    <!-- Armorstack -->
+    <rect x="205" y="0" width="155" height="55" fill="#0F172A" stroke="#0EA5E9" stroke-width="1.5" rx="5"/>
+    <text x="283" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Armorstack</text>
+    <text x="283" y="32" text-anchor="middle" fill="#7DD3FC" font-size="10">Port 8081</text>
+    <text x="283" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Lilac -->
+    <rect x="380" y="0" width="155" height="55" fill="#0F172A" stroke="#A855F7" stroke-width="1.5" rx="5"/>
+    <text x="458" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Lilac Ventures</text>
+    <text x="458" y="32" text-anchor="middle" fill="#C084FC" font-size="10">Port 8082</text>
+    <text x="458" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Caspian Intl -->
+    <rect x="555" y="0" width="155" height="55" fill="#0F172A" stroke="#10B981" stroke-width="1.5" rx="5"/>
+    <text x="633" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Caspian Intl</text>
+    <text x="633" y="32" text-anchor="middle" fill="#6EE7B7" font-size="10">Port 8083</text>
+    <text x="633" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- JW Debt -->
+    <rect x="730" y="0" width="155" height="55" fill="#0F172A" stroke="#F59E0B" stroke-width="1.5" rx="5"/>
+    <text x="808" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC JW Debt</text>
+    <text x="808" y="32" text-anchor="middle" fill="#FCD34D" font-size="10">Port 8084</text>
+    <text x="808" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- NJB Education -->
+    <rect x="905" y="0" width="155" height="55" fill="#0F172A" stroke="#EC4899" stroke-width="1.5" rx="5"/>
+    <text x="983" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC NJB Education</text>
+    <text x="983" y="32" text-anchor="middle" fill="#F9A8D4" font-size="10">Port 8085</text>
+    <text x="983" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+  </g>
+
+  <!-- Entity Dashboards - Row 2 (ports 8086-8090) -->
+  <g transform="translate(0, 350)">
+    <!-- LDB Education -->
+    <rect x="100" y="0" width="155" height="55" fill="#0F172A" stroke="#14B8A6" stroke-width="1.5" rx="5"/>
+    <text x="178" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC LDB Education</text>
+    <text x="178" y="32" text-anchor="middle" fill="#5EEAD4" font-size="10">Port 8086</text>
+    <text x="178" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Parkside -->
+    <rect x="280" y="0" width="155" height="55" fill="#0F172A" stroke="#6366F1" stroke-width="1.5" rx="5"/>
+    <text x="358" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Parkside</text>
+    <text x="358" y="32" text-anchor="middle" fill="#A5B4FC" font-size="10">Port 8087</text>
+    <text x="358" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Armorstack Tax -->
+    <rect x="460" y="0" width="155" height="55" fill="#0F172A" stroke="#DC2626" stroke-width="1.5" rx="5"/>
+    <text x="538" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Armorstack Tax</text>
+    <text x="538" y="32" text-anchor="middle" fill="#FCA5A5" font-size="10">Port 8088</text>
+    <text x="538" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Armorstack Marketing -->
+    <rect x="640" y="0" width="155" height="55" fill="#0F172A" stroke="#7C3AED" stroke-width="1.5" rx="5"/>
+    <text x="718" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC AS Marketing</text>
+    <text x="718" y="32" text-anchor="middle" fill="#C4B5FD" font-size="10">Port 8089</text>
+    <text x="718" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+
+    <!-- Armorstack T&E -->
+    <rect x="820" y="0" width="155" height="55" fill="#0F172A" stroke="#059669" stroke-width="1.5" rx="5"/>
+    <text x="898" y="18" text-anchor="middle" fill="#F8FAFC" font-size="11" font-weight="600">GC Armorstack T&E</text>
+    <text x="898" y="32" text-anchor="middle" fill="#6EE7B7" font-size="10">Port 8090</text>
+    <text x="898" y="44" text-anchor="middle" class="status-pending" font-size="10">○ PENDING</text>
+  </g>
+
+  <!-- Connection lines from master to entity dashboards -->
+  <line x1="550" y1="255" x2="108" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="283" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="458" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="633" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="808" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="983" y2="275" class="edge"/>
+  <line x1="550" y1="255" x2="178" y2="350" class="edge"/>
+  <line x1="550" y1="255" x2="358" y2="350" class="edge"/>
+  <line x1="550" y1="255" x2="538" y2="350" class="edge"/>
+  <line x1="550" y1="255" x2="718" y2="350" class="edge"/>
+  <line x1="550" y1="255" x2="898" y2="350" class="edge"/>
+
+  <!-- Data Layer -->
+  <g transform="translate(0, 430)">
+    <!-- SQLite DB -->
+    <rect x="60" y="0" width="200" height="65" fill="#0F172A" stroke="#10B981" stroke-width="2" rx="6"/>
+    <text x="160" y="18" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="600">SQLite Portfolio DB</text>
+    <text x="160" y="34" text-anchor="middle" fill="#6EE7B7" font-size="10">/opt/polybot/db/portfolio.db</text>
+    <text x="160" y="48" text-anchor="middle" fill="#94A3B8" font-size="10">trades | snapshots | resolutions</text>
+    <text x="160" y="60" text-anchor="middle" fill="#94A3B8" font-size="10">transfers | entities</text>
+
+    <!-- Polymarket Data API -->
+    <rect x="340" y="0" width="200" height="65" fill="#0F172A" stroke="#F59E0B" stroke-width="1.5" rx="6"/>
+    <text x="440" y="18" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="600">Polymarket Data API</text>
+    <text x="440" y="34" text-anchor="middle" fill="#FCD34D" font-size="10">data-api.polymarket.com</text>
+    <text x="440" y="48" text-anchor="middle" fill="#94A3B8" font-size="10">/activity | /positions</text>
+    <text x="440" y="60" text-anchor="middle" fill="#94A3B8" font-size="10">/trades | /profile</text>
+
+    <!-- Polymarket CLOB -->
+    <rect x="620" y="0" width="200" height="65" fill="#0F172A" stroke="#EC4899" stroke-width="1.5" rx="6"/>
+    <text x="720" y="18" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="600">Polymarket CLOB API</text>
+    <text x="720" y="34" text-anchor="middle" fill="#F9A8D4" font-size="10">clob.polymarket.com</text>
+    <text x="720" y="48" text-anchor="middle" fill="#94A3B8" font-size="10">Order placement / cancellation</text>
+    <text x="720" y="60" text-anchor="middle" fill="#94A3B8" font-size="10">py-clob-client SDK</text>
+
+    <!-- Polygon Chain -->
+    <rect x="880" y="0" width="180" height="65" fill="#0F172A" stroke="#7C3AED" stroke-width="1.5" rx="6"/>
+    <text x="970" y="18" text-anchor="middle" fill="#F8FAFC" font-size="12" font-weight="600">Polygon PoS Chain</text>
+    <text x="970" y="34" text-anchor="middle" fill="#C4B5FD" font-size="10">USDC.e Settlements</text>
+    <text x="970" y="48" text-anchor="middle" fill="#94A3B8" font-size="10">POL Gas / web3.py</text>
+    <text x="970" y="60" text-anchor="middle" fill="#94A3B8" font-size="10">On-chain finality</text>
+  </g>
+
+  <!-- Arrows between data layer -->
+  <line x1="260" y1="460" x2="340" y2="460" class="edge" marker-end="url(#arrow2)"/>
+  <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker></defs>
+  <text x="300" y="452" text-anchor="middle" fill="#64748B" font-size="9">db_writer.py</text>
+
+  <!-- Bot Engine Layer -->
+  <g transform="translate(0, 530)">
+    <rect x="60" y="0" width="1000" height="75" fill="#0F172A" stroke="#475569" stroke-width="1" rx="8" stroke-dasharray="4"/>
+    <text x="80" y="18" fill="#94A3B8" font-size="11" font-weight="500">BOT ENGINE (Cron-driven)</text>
+
+    <!-- Individual bots -->
+    <rect x="80" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="135" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Grinder</text>
+    <text x="135" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/10 min</text>
+
+    <rect x="200" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="255" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Sprint Trader</text>
+    <text x="255" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/15 min</text>
+
+    <rect x="320" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="375" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Auto Trader</text>
+    <text x="375" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/15 min</text>
+
+    <rect x="440" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="495" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Arb Executor</text>
+    <text x="495" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/5 min</text>
+
+    <rect x="560" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="615" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Reconcile</text>
+    <text x="615" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/5 min</text>
+
+    <rect x="680" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="735" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Auto Redeem</text>
+    <text x="735" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">0,30 min</text>
+
+    <rect x="800" y="28" width="110" height="36" fill="#1E293B" rx="4"/>
+    <text x="855" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">Auto Fund</text>
+    <text x="855" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">15,45 min</text>
+
+    <rect x="920" y="28" width="120" height="36" fill="#1E293B" rx="4"/>
+    <text x="980" y="44" text-anchor="middle" fill="#F8FAFC" font-size="10">DB Writer</text>
+    <text x="980" y="56" text-anchor="middle" fill="#94A3B8" font-size="9">*/5 min</text>
+  </g>
+
+  <!-- Reports Layer -->
+  <g transform="translate(0, 630)">
+    <rect x="200" y="0" width="180" height="40" fill="#1E293B" stroke="#10B981" stroke-width="1" rx="5"/>
+    <text x="290" y="16" text-anchor="middle" fill="#F8FAFC" font-size="11">Portfolio Report</text>
+    <text x="290" y="30" text-anchor="middle" fill="#6EE7B7" font-size="9">Every 6 hours → email</text>
+
+    <rect x="420" y="0" width="180" height="40" fill="#1E293B" stroke="#F59E0B" stroke-width="1" rx="5"/>
+    <text x="510" y="16" text-anchor="middle" fill="#F8FAFC" font-size="11">Tax Report</text>
+    <text x="510" y="30" text-anchor="middle" fill="#FCD34D" font-size="9">Weekly Mon → email</text>
+
+    <rect x="640" y="0" width="180" height="40" fill="#1E293B" stroke="#0EA5E9" stroke-width="1" rx="5"/>
+    <text x="730" y="16" text-anchor="middle" fill="#F8FAFC" font-size="11">Web Reports</text>
+    <text x="730" y="30" text-anchor="middle" fill="#7DD3FC" font-size="9">geminicap.net/reports/</text>
+  </g>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#10B981"></div>Active / Database</div>
+  <div class="legend-item"><div class="legend-color" style="background:#0EA5E9"></div>Nginx / Network</div>
+  <div class="legend-item"><div class="legend-color" style="background:#F59E0B"></div>External API</div>
+  <div class="legend-item"><div class="legend-color" style="background:#EC4899"></div>Trading API</div>
+  <div class="legend-item"><div class="legend-color" style="background:#7C3AED"></div>Blockchain</div>
+  <div class="legend-item"><div class="legend-color" style="background:#475569"></div>Internal</div>
+</div>
+</div>
+
+<div class="section">
+<h2>Port & Service Map</h2>
+<table>
+<tr><th>Port</th><th>Service</th><th>Access</th><th>Path</th><th>Status</th></tr>
+<tr><td><code>443</code></td><td>Nginx HTTPS (SSL)</td><td>Public</td><td>geminicap.net</td><td class="status-active">● Active</td></tr>
+<tr><td><code>80</code></td><td>Nginx HTTP → 443 redirect</td><td>Public</td><td>—</td><td class="status-active">● Active</td></tr>
+<tr><td><code>2222</code></td><td>SSH (OpenSSH)</td><td>Public (key-only)</td><td>—</td><td class="status-active">● Active</td></tr>
+<tr><td><code>9090</code></td><td>Master Aggregator Dashboard</td><td>Localhost → Nginx</td><td>/</td><td class="status-active">● Active</td></tr>
+<tr><td><code>8080</code></td><td>GC Caspian Dashboard</td><td>Localhost → Nginx</td><td>/entity/caspian/</td><td class="status-active">● Active</td></tr>
+<tr><td><code>8081</code></td><td>GC Armorstack Dashboard</td><td>Localhost → Nginx</td><td>/entity/armorstack/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8082</code></td><td>GC Lilac Ventures Dashboard</td><td>Localhost → Nginx</td><td>/entity/lilac/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8083</code></td><td>GC Caspian International Dashboard</td><td>Localhost → Nginx</td><td>/entity/caspian-intl/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8084</code></td><td>GC JW Debt Dashboard</td><td>Localhost → Nginx</td><td>/entity/jw-debt/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8085</code></td><td>GC NJB Education Fund Dashboard</td><td>Localhost → Nginx</td><td>/entity/njb-education/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8086</code></td><td>GC LDB Education Fund Dashboard</td><td>Localhost → Nginx</td><td>/entity/ldb-education/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8087</code></td><td>GC Parkside Infrastructure Dashboard</td><td>Localhost → Nginx</td><td>/entity/parkside/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8088</code></td><td>GC Armorstack Tax Dashboard</td><td>Localhost → Nginx</td><td>/entity/armorstack-tax/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8089</code></td><td>GC Armorstack Marketing Dashboard</td><td>Localhost → Nginx</td><td>/entity/armorstack-marketing/</td><td class="status-pending">○ Pending</td></tr>
+<tr><td><code>8090</code></td><td>GC Armorstack T&E Dashboard</td><td>Localhost → Nginx</td><td>/entity/armorstack-te/</td><td class="status-pending">○ Pending</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>Entity Wallet Registry (15 Entities — All Independent)</h2>
+<table>
+<tr><th>Entity</th><th>Slug</th><th>Wallet Address</th><th>CLOB API Key</th><th>Port</th><th>Filesystem</th></tr>
+<tr><td>GC Caspian <span class="status-active">●</span></td><td><code>caspian</code></td><td><code>0xF8d12267...121fd7</code></td><td><code>9de9a52a-7f54...</code></td><td>8080</td><td><code>/opt/polybot</code></td></tr>
+<tr><td>GC Armorstack</td><td><code>armorstack</code></td><td><code>0x8c8b53DD...AcC76</code></td><td><code>c1a6f05a-5669...</code></td><td>8081</td><td><code>/opt/armorstack</code></td></tr>
+<tr><td>GC Lilac Ventures</td><td><code>lilac</code></td><td><code>0x8d601F31...C941</code></td><td><code>670eedfe-ee53...</code></td><td>8082</td><td><code>/opt/lilac</code></td></tr>
+<tr><td>GC Caspian International</td><td><code>caspian-intl</code></td><td><code>0xB1e4b9Ab...0dDf</code></td><td><code>72051b48-2d23...</code></td><td>8083</td><td><code>/opt/caspian-intl</code></td></tr>
+<tr><td>GC JW Debt</td><td><code>jw-debt</code></td><td><code>0x0B015f51...328C</code></td><td><code>6af8e1a6-9d1c...</code></td><td>8084</td><td><code>/opt/jw-debt</code></td></tr>
+<tr><td>GC NJB Education Fund</td><td><code>njb-education</code></td><td><code>0x26Ea7D57...83be</code></td><td><code>afd1566a-70b9...</code></td><td>8085</td><td><code>/opt/njb-education</code></td></tr>
+<tr><td>GC LDB Education Fund</td><td><code>ldb-education</code></td><td><code>0xfaE4e55c...17Af</code></td><td><code>4c743fe5-6aac...</code></td><td>8086</td><td><code>/opt/ldb-education</code></td></tr>
+<tr><td>GC Parkside Infrastructure</td><td><code>parkside</code></td><td><code>0x0d97804F...7f1c</code></td><td><code>44535905-86c7...</code></td><td>8087</td><td><code>/opt/parkside</code></td></tr>
+<tr><td>GC Armorstack Tax</td><td><code>armorstack-tax</code></td><td><code>0x01833f23...AD3a</code></td><td><code>33ff634c-e72d...</code></td><td>8088</td><td><code>/opt/armorstack-tax</code></td></tr>
+<tr><td>GC Armorstack Marketing</td><td><code>armorstack-marketing</code></td><td><code>0x5Ea96ED3...f04B</code></td><td><code>d794e401-f794...</code></td><td>8089</td><td><code>/opt/armorstack-marketing</code></td></tr>
+<tr><td>GC Armorstack T&amp;E</td><td><code>armorstack-te</code></td><td><code>0xf3db5198...C570</code></td><td><code>03903b07-d58b...</code></td><td>8090</td><td><code>/opt/armorstack-te</code></td></tr>
+<tr><td>GC DH Debt</td><td><code>dh-debt</code></td><td><code>0x3280cc28...9E8b</code></td><td><code>26efa0e7-d405...</code></td><td>—</td><td><code>/opt/dh-debt</code></td></tr>
+<tr><td>GC HR</td><td><code>hr</code></td><td><code>0x7C489AB8...2a47</code></td><td><code>9f111693-57c3...</code></td><td>—</td><td><code>/opt/hr</code></td></tr>
+<tr><td>GC Legal</td><td><code>legal</code></td><td><code>0x74f58e1e...5Fed</code></td><td><code>dbed11ec-62b8...</code></td><td>—</td><td><code>/opt/legal</code></td></tr>
+<tr><td>GC MS Debt</td><td><code>ms-debt</code></td><td><code>0x5B043F97...F206</code></td><td><code>4a44deaf-cbb8...</code></td><td>—</td><td><code>/opt/ms-debt</code></td></tr>
+</table>
+<p style="color:#10B981;font-size:11px;margin-top:8px;">All 15 entities now have independent wallets and CLOB API keys (provisioned 2026-03-30). No shared wallets remain.</p>
+</div>
+
+<div class="section">
+<h2>Cron Schedule (18 Jobs)</h2>
+<table>
+<tr><th>Schedule</th><th>Script</th><th>Function</th></tr>
+<tr><td><code>*/5 min</code></td><td>reconcile.py</td><td>Sync portfolio state with on-chain data</td></tr>
+<tr><td><code>*/5 min</code></td><td>db_writer.py</td><td>Ingest trades from Data API → SQLite</td></tr>
+<tr><td><code>*/5 min</code></td><td>open_orders_cache.py</td><td>Cache open orders state</td></tr>
+<tr><td><code>*/5 min</code></td><td>arb_executor.py</td><td>Execute arbitrage opportunities</td></tr>
+<tr><td><code>*/10 min</code></td><td>run_grinder.sh</td><td>Grinder bot (92-98.5% probability trades)</td></tr>
+<tr><td><code>*/15 min</code></td><td>run_sprint.sh</td><td>Sprint trader execution</td></tr>
+<tr><td><code>*/15 min</code></td><td>run_auto.sh</td><td>Auto trader execution</td></tr>
+<tr><td><code>*/15 min</code></td><td>position_monitor.py</td><td>Monitor positions for exit signals</td></tr>
+<tr><td><code>*/15 min</code></td><td>correctness_verifier.py</td><td>Verify data consistency</td></tr>
+<tr><td><code>5,35 min</code></td><td>auto_deposit.py</td><td>Auto-deposit management</td></tr>
+<tr><td><code>15,45 min</code></td><td>auto_fund.py</td><td>Cross-entity USDC funding ($2,500 trigger)</td></tr>
+<tr><td><code>0,30 min</code></td><td>auto_redeem.py</td><td>Claim resolved positions → USDC</td></tr>
+<tr><td><code>50 min</code></td><td>health_monitor.py</td><td>System health checks</td></tr>
+<tr><td><code>hourly</code></td><td>sync_to_drive.sh</td><td>Backup state to Google Drive</td></tr>
+<tr><td><code>6-hourly</code></td><td>email_report.py --portfolio</td><td>Portfolio status report → email</td></tr>
+<tr><td><code>weekly Mon</code></td><td>email_report.py --tax-weekly</td><td>Taxable income report → email</td></tr>
+<tr><td><code>daily 3AM</code></td><td>backup_state.sh</td><td>Full state backup</td></tr>
+<tr><td><code>monthly 1st</code></td><td>email_report.py --cleanup</td><td>Prune old report files</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>Database Schema</h2>
+<table>
+<tr><th>Table</th><th>Records</th><th>Purpose</th><th>Key Fields</th></tr>
+<tr><td><code>entities</code></td><td>15</td><td>Entity registry</td><td>slug, name, wallet_address, port, status</td></tr>
+<tr><td><code>trades</code></td><td>277</td><td>On-chain trades (source of truth)</td><td>entity_slug, tx_hash, side, usdc_size, price, title</td></tr>
+<tr><td><code>resolutions</code></td><td>15</td><td>Resolved positions (taxable events)</td><td>entity_slug, payout_usdc, cost_basis_usdc, realized_pnl</td></tr>
+<tr><td><code>snapshots</code></td><td>22</td><td>Periodic portfolio state</td><td>entity_slug, total_equity, cash_balance, pnl_vs_deposit</td></tr>
+<tr><td><code>transfers</code></td><td>0</td><td>Cross-entity USDC movements</td><td>from_entity, to_entity, amount_usdc, tx_hash</td></tr>
+</table>
+</div>
+
+<div class="footer">
+Gemini Capital Infrastructure Architecture v2.1 — Generated 2026-03-30 | VPS: 178.62.225.235 (DigitalOcean AMS3) | 15 entities, all independent wallets
+</div>
+</div>
+</body>
+</html>
