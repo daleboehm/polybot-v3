@@ -1,10 +1,12 @@
 # Polymarket V3 — Live Status
 
-Updated: 2026-04-10 21:05 (end of the deploy + stabilization session — both v3 engines live, clean state)
+Updated: 2026-04-10 22:15 (v1/v2 cleanup + security audit pass complete)
 
-## Both engines LIVE on v3 — rebuild deployed and stable
+## Both engines LIVE on v3 — full cleanup + hardening applied
 
-The Opus 4.6 session deployed v3 to the VPS at `/opt/polybot-v3/` (prod) and `/opt/polybot-v3-rd/` (R&D). Both services are **active**, healthy, and running from identical rebuilt `dist/` artifacts. v2 directories are quiesced but preserved for reference until R3c cleanup deletes them.
+v3 is now the ONLY polybot code on the VPS. All v1/v2 directories deleted, credentials
+migrated to v3 paths, systemd autostart enabled, security updates applied, plaintext
+API keys removed from root crontab, and the unused win11-vm SSH key removed.
 
 - **VPS `polybot-v3.service`** — LIVE, prod, port 9100, dashboard at https://sageadvisors.ai, mode=live
 - **VPS `polybot-v3-rd.service`** — LIVE, R&D, port 9200, dashboard at https://rd.sageadvisors.ai/rd, mode=paper, `BASE_PATH=/rd`
