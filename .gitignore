@@ -31,8 +31,11 @@ data/
 *.sqlite-journal
 
 # ─── Archives + backups ────────────────────────────────────────
-archive/
-backup/
+# /archive/ matches only the top-level archive directory (used on VPS for
+# db snapshots). src/strategy/archive/ is intentionally tracked — it holds
+# the quarantined-but-still-referenced strategies during the 30-day window.
+/archive/
+/backup/
 *.bak
 *.backup
 
