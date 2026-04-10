@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<title>Entity - Gemini Capital</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: linear-gradient(135deg, #0a0e17 0%, #111827 100%); color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow-x: hidden; }
+header { background: #0a0e17; border-bottom: 2px solid #f6ad55; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.header-left h1 { color: #f6ad55; font-size: 1.5em; font-weight: 700; }
+.header-left .subtitle { color: #718096; font-size: 0.8em; margin-top: 2px; }
+a.back { color: #a0aec0; text-decoration: none; font-size: 0.85em; padding: 6px 12px; border-radius: 6px; border: 1px solid #2d3748; }
+a.back:hover { background: #1a1f2e; color: #e2e8f0; }
+.badge-sm { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 600; }
+.badge-live { background: #166534; color: #86efac; }
+.badge-paper { background: #2563eb; color: #93c5fd; }
+.container { max-width: 1600px; margin: 0 auto; padding: 24px; }
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+.sb-item { display: flex; flex-direction: column; }
+.sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 4px; }
+.sb-value { font-size: 22px; font-weight: 700; }
+.green { color: #10b981; } .red { color: #ef4444; } .orange { color: #f6ad55; } .blue { color: #3b82f6; } .cyan { color: #06b6d4; } .neutral { color: #718096; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+.section { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.section h2 { color: #f6ad55; font-size: 1.05em; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 8px; }
+.section h2 .count { color: #718096; font-weight: 400; font-size: 0.85em; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.metric-box { background: #0f1117; border: 1px solid #2d3748; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center; }
+.metric-box-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-box-value { font-size: 17px; font-weight: 600; color: #e2e8f0; text-align: right; white-space: nowrap; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+th { text-align: left; color: #718096; font-weight: 600; padding: 10px 8px; border-bottom: 1px solid #2d3748; text-transform: uppercase; font-size: 0.7em; letter-spacing: 0.05em; background: #0f1117; }
+td { padding: 9px 8px; border-bottom: 1px solid rgba(45,55,72,0.5); }
+tr:hover { background: rgba(15,17,23,0.6); }
+.strategy-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: 600; background: #2d3748; color: #a0aec0; }
+.events-log { max-height: 300px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 12px; background: #0f1117; padding: 12px; border-radius: 8px; border: 1px solid #2d3748; }
+.events-log .event { padding: 4px 0; border-bottom: 1px solid #1a1f2e; }
+@media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head><body>
+
+<header>
+  <div class="header-left">
+    <h1 id="entityName">Loading...</h1>
+    <div class="subtitle" id="entitySub"></div>
+  </div>
+  <a href="/" class="back">&larr; Back to Dashboard</a>
+</header>
+
+<div class="container">
+  <!-- SCOREBOARD -->
+  <div class="scoreboard" id="scoreboard"></div>
+
+  <!-- OPEN POSITIONS -->
+  <div class="section">
+    <h2>Open Positions <span class="count" id="posCount"></span></h2>
+    <table>
+      <thead><tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Cost Basis</th><th>Est. Gain</th><th>Est. Resolution</th><th>Strategy</th></tr></thead>
+      <tbody id="posBody"></tbody>
+      <tfoot id="posFoot" style="border-top:2px solid #f6ad55;font-weight:700;"></tfoot>
+    </table>
+  </div>
+
+  <!-- STRATEGY PERFORMANCE + LIVE EVENTS -->
+  <div class="two-col">
+    <div class="section">
+      <h2>Strategy Performance</h2>
+      <table>
+        <thead><tr><th>Strategy</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Status</th></tr></thead>
+        <tbody id="stratBody"></tbody>
+      </table>
+
+      <!-- RECENT RESOLUTIONS (under strategy) -->
+      <h2 style="margin-top: 20px;">Recent Resolutions <span class="count" id="resCount"></span></h2>
+      <table>
+        <thead><tr><th>Market</th><th>Winner</th><th>Payout</th><th>Cost</th><th>P&L</th><th>Strategy</th></tr></thead>
+        <tbody id="resBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>Live Events</h2>
+      <div class="events-log" id="eventsLog">
+        <div class="event"><span style="color:#4a5568">--:--:--</span> Waiting for events...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var SLUG = window.location.pathname.split('/').pop();
+function F(v) { var a=Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return v>=0?'$'+a:'-$'+a; }
+function C(v) { return v > 0 ? 'green' : v < 0 ? 'red' : 'neutral'; }
+
+async function load() {
+  var entities = await fetch('/api/entities').then(function(r){return r.json()});
+  var e = entities.find(function(x){return x.slug === SLUG});
+  if (!e) { document.getElementById('entityName').textContent = 'Entity not found'; return; }
+
+  var positions = await fetch('/api/'+SLUG+'/positions').then(function(r){return r.json()}).catch(function(){return []});
+  var resolutions = await fetch('/api/'+SLUG+'/resolutions').then(function(r){return r.json()}).catch(function(){return []});
+  var allMarkets = await fetch('/api/markets/all').then(function(r){return r.json()}).catch(function(){return []});
+  var marketMap = {};
+  allMarkets.forEach(function(m) { marketMap[m.condition_id] = m; });
+
+  // Header
+  document.title = e.name + ' - Gemini Capital';
+  document.getElementById('entityName').textContent = e.name;
+  var badge = e.mode === 'live' ? '<span class="badge-sm badge-live">LIVE</span>' : '<span class="badge-sm badge-paper">R&D</span>';
+  document.getElementById('entitySub').innerHTML = badge + ' &middot; ' + e.status + ' &middot; ' + e.slug;
+
+  // Scoreboard
+  var bal = e.current_cash + e.reserve_balance;
+  var posValue = positions.reduce(function(s,p){return s + (p.cost_basis||0)}, 0);
+  var equity = bal + posValue;
+  var wr = (e.total_wins+e.total_losses) > 0 ? ((e.total_wins/(e.total_wins+e.total_losses))*100).toFixed(1)+'%' : '-';
+  var totalUpside = positions.reduce(function(s,p){ return s + (p.avg_entry_price > 0 ? (1 - p.avg_entry_price) * p.size : 0)}, 0);
+
+  document.getElementById('scoreboard').innerHTML =
+    '<div class="sb-item"><span class="sb-label">Equity</span><span class="sb-value orange">'+F(equity)+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">Cash</span><span class="sb-value">'+F(bal)+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">Capital Deployed</span><span class="sb-value blue">'+F(posValue)+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">P&L vs Start</span><span class="sb-value '+C(equity - e.starting_capital)+'">'+F(equity - e.starting_capital)+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">Total Upside</span><span class="sb-value green">'+F(totalUpside)+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">Win Rate</span><span class="sb-value">'+wr+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">W / L</span><span class="sb-value"><span class="green">'+e.total_wins+'</span> / <span class="red">'+e.total_losses+'</span></span></div>' +
+    '<div class="sb-item"><span class="sb-label">Total Trades</span><span class="sb-value cyan">'+e.total_trades.toLocaleString()+'</span></div>' +
+    '<div class="sb-item"><span class="sb-label">Open Positions</span><span class="sb-value orange">'+e.open_positions+'</span></div>';
+
+  // Open Positions
+  document.getElementById('posCount').textContent = '(' + positions.length + ')';
+  var totalCostBasis = 0, totalEstGain = 0, totalSize = 0;
+  document.getElementById('posBody').innerHTML = positions.length === 0
+    ? '<tr><td colspan="8" style="color:#718096;text-align:center;padding:20px">No open positions</td></tr>'
+    : positions.map(function(p) {
+        var mkt = marketMap[p.condition_id];
+        var endDate = '-';
+        if (mkt && mkt.end_date) {
+          var d = new Date(mkt.end_date);
+          if (!isNaN(d.getTime())) {
+            var now = new Date();
+            var diffH = Math.round((d - now) / 3600000);
+            if (diffH < 0) endDate = '<span style="color:#ef4444">Overdue</span>';
+            else if (diffH < 24) endDate = '<span style="color:#f6ad55">' + diffH + 'h</span>';
+            else if (diffH < 168) endDate = Math.round(diffH/24) + 'd';
+            else endDate = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+          }
+        }
+        var cost = p.cost_basis || 0;
+        var estGain = p.size > 0 && p.avg_entry_price > 0 ? (1 - p.avg_entry_price) * p.size : 0;
+        totalCostBasis += cost;
+        totalEstGain += estGain;
+        totalSize += p.size;
+        return '<tr><td>'+(p.market_question||'').substring(0,50)+'</td><td>'+p.side+'</td><td>'+p.size.toFixed(2)+'</td><td>$'+(p.avg_entry_price||0).toFixed(3)+'</td><td>'+F(cost)+'</td><td class="green">'+F(estGain)+'</td><td>'+endDate+'</td><td><span class="strategy-tag">'+(p.strategy_id||'-')+'</span></td></tr>';
+      }).join('');
+  if (positions.length > 0) {
+    document.getElementById('posFoot').innerHTML = '<tr><td style="color:#f6ad55">TOTAL</td><td></td><td>'+totalSize.toFixed(2)+'</td><td></td><td style="color:#f6ad55">'+F(totalCostBasis)+'</td><td class="green" style="font-weight:700">'+F(totalEstGain)+'</td><td></td><td></td></tr>';
+  }
+
+  // Strategy Performance
+  var stratMap = {};
+  resolutions.forEach(function(r) {
+    var sid = r.strategy_id || 'unknown';
+    if (!stratMap[sid]) stratMap[sid] = {wins:0, losses:0, pnl:0};
+    if (r.realized_pnl > 0) stratMap[sid].wins++;
+    else stratMap[sid].losses++;
+    stratMap[sid].pnl += r.realized_pnl;
+  });
+  var allStrats = ['weather_forecast','crypto_price','favorites','complement','longshot','value','skew','convergence'];
+  document.getElementById('stratBody').innerHTML = allStrats.map(function(s) {
+    var d = stratMap[s];
+    if (d) {
+      var total = d.wins + d.losses;
+      var swr = total > 0 ? ((d.wins/total)*100).toFixed(1)+'%' : '-';
+      return '<tr><td><span class="strategy-tag">'+s+'</span></td><td>'+total+'</td><td><span class="green">'+d.wins+'</span>/<span class="red">'+d.losses+'</span></td><td>'+swr+'</td><td class="'+C(d.pnl)+'">'+F(d.pnl)+'</td><td style="color:#10b981">Active</td></tr>';
+    }
+    return '<tr><td><span class="strategy-tag">'+s+'</span></td><td>-</td><td>-</td><td>-</td><td>-</td><td style="color:#718096">Inactive</td></tr>';
+  }).join('');
+
+  // Recent Resolutions
+  document.getElementById('resCount').textContent = '(' + resolutions.length + ')';
+  document.getElementById('resBody').innerHTML = resolutions.length === 0
+    ? '<tr><td colspan="6" style="color:#718096;text-align:center;padding:20px">No resolutions yet</td></tr>'
+    : resolutions.slice(0,20).map(function(r) {
+        return '<tr><td>'+(r.market_question||'').substring(0,40)+'</td><td>'+r.winning_outcome+'</td><td class="green">'+F(r.payout_usdc)+'</td><td>'+F(r.cost_basis_usdc)+'</td><td class="'+C(r.realized_pnl)+'">'+F(r.realized_pnl)+'</td><td><span class="strategy-tag">'+(r.strategy_id||'-')+'</span></td></tr>';
+      }).join('');
+
+  // SSE Live Events
+  try {
+    var es = new EventSource('/events');
+    var elog = document.getElementById('eventsLog');
+    var evCount = 0;
+    es.addEventListener('order:filled', function(ev) {
+      var d = JSON.parse(ev.data);
+      if (d.fill && d.fill.entity_slug === SLUG) {
+        evCount++;
+        var ts = new Date().toLocaleTimeString();
+        elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#10b981">FILL: '+d.fill.side+' '+d.fill.outcome+' @ $'+d.fill.price.toFixed(3)+' ('+F(d.fill.usdc_size)+')</span></div>' + elog.innerHTML;
+      }
+    });
+    es.addEventListener('engine:cycle_complete', function(ev) {
+      var d = JSON.parse(ev.data);
+      evCount++;
+      var ts = new Date().toLocaleTimeString();
+      elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#06b6d4">Cycle '+d.cycle+': '+d.signals+' signals, '+d.orders+' orders ('+d.duration_ms+'ms)</span></div>' + elog.innerHTML;
+    });
+    es.addEventListener('risk:lockout', function(ev) {
+      var d = JSON.parse(ev.data);
+      if (d.entity_slug === SLUG) {
+        var ts = new Date().toLocaleTimeString();
+        elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#ef4444">LOCKOUT: '+d.reason+'</span></div>' + elog.innerHTML;
+      }
+    });
+  } catch(e) {}
+}
+load();
+</script>
+</body></html>

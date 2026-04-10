@@ -1,0 +1,63 @@
+# R&D Engine configuration — faster scan cycle, same risk params, paper only
+engine:
+  scan_interval_ms: 120000        # 2 minutes — faster iteration for R&D
+  snapshot_interval_ms: 1800000   # 30 minutes
+  risk_check_interval_ms: 60000
+  orderbook_subscribe: false       # Save resources — R&D doesn't need real-time books
+  max_concurrent_orders: 20        # Higher for R&D — paper trades are cheap
+  log_level: info
+
+risk:
+  max_positions: 100000            # Dale 2026-04-10: "no limits on positions" — R&D's goal is
+                                   # resolution-data coverage across every strategy & sub-strategy.
+                                   # Natural cash constraint (max_position_usd × open_count ≤ cash)
+                                   # is the only real limit now. With $10K paper and $10 positions,
+                                   # R&D can hold up to ~1000 positions concurrently.
+  max_position_pct: 0.05           # 5% per position — still enforced as a Kelly hard ceiling
+  max_position_usd: 10.00          # Smaller paper positions for broader coverage. $10K / $10 = 1000
+                                   # slots, enough room for every sub-strategy to accumulate data
+                                   # before cash binds.
+  fractional_kelly: 0.25
+  daily_loss_lockout_usd: 500.00   # High lockout — don't want R&D stopping itself
+  stop_loss_pct: 0.20
+  hard_stop_usd: 25.00
+  profit_target_pct: 0.40
+  reserve_ratio: 0.0
+  trading_ratio: 1.0
+  min_edge_threshold: 0.02
+  min_hold_hours: 2
+  min_hours_to_resolve: 1          # Dale 2026-04-10: only short-horizon positions to keep the
+  max_hours_to_resolve: 48         # wheels spinning. 1-48h window enforced in strategy-context.
+  tiered_stops:
+    - max_entry: 1.00
+      min_entry: 0.50
+      stop_pct: 0.30
+    - max_entry: 0.50
+      min_entry: 0.20
+      stop_pct: 0.50
+    - max_entry: 0.20
+      min_entry: 0.10
+      stop_pct: 0.60
+    - max_entry: 0.10
+      min_entry: 0.00
+      stop_pct: null
+
+execution:
+  slippage_bps: 50
+  bid_premium_pct: 0.02
+  max_retries: 3
+  retry_delay_ms: 2000
+  paper_fill_delay_ms: 200         # Faster paper fills for R&D
+
+api:
+  clob_base_url: https://clob.polymarket.com
+  data_api_base_url: https://data-api.polymarket.com
+  ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+  rate_limit_per_second: 10
+
+dashboard:
+  port: 9200
+  auth_enabled: true
+
+database:
+  path: /opt/polybot-v3-rd/data/rd.db

@@ -1,0 +1,49 @@
+[Unit]
+Description=Polybot V3 R&D Engine (Paper Only)
+After=network.target
+Wants=network-online.target
+
+[Service]
+# 2026-04-10 fix: load DASHBOARD_PASSWORD (and any other overrideable secrets) from
+# an .env file at this path. The file lives on the VPS only — never committed.
+# Format (chmod 600, owned by root):
+#   DASHBOARD_USER=dboehm@thinkcaspian.com
+#   DASHBOARD_PASSWORD=<actual password>
+#   ODDS_API_KEY=...
+#   FRED_API_KEY=...
+# EnvironmentFile values override any `Environment=` lines below with the same key.
+EnvironmentFile=/opt/polybot-v3-rd/.env
+Type=simple
+User=root
+WorkingDirectory=/opt/polybot-v3-rd
+ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=10
+
+# R&D engine env — paper-only exploration (Dale 2026-04-10: R&D stays paper,
+# at $10K starting capital). R&D's purpose is strategy-space coverage + advisor
+# promotion signal; paper returns aren't real profit but they drive which
+# strategies get enabled on prod. BASE_PATH=/rd activates the R&D URL prefix.
+Environment=BASE_PATH=/rd
+Environment=POLYBOT_LIVE_MODE=false
+Environment=POLYBOT_LIVE_CONFIRM=false
+Environment=LOG_LEVEL=info
+Environment=DATABASE_PATH=/opt/polybot-v3-rd/data/rd.db
+Environment=CONFIG_PATH=/opt/polybot-v3-rd/config/rd-default.yaml
+Environment=ENTITIES_PATH=/opt/polybot-v3-rd/config/rd-entities.yaml
+# DASHBOARD_USER and DASHBOARD_PASSWORD are loaded from /opt/polybot-v3-rd/.env
+# (see EnvironmentFile directive above). NEVER hardcoded here — the repo is
+# shared on GitHub and secrets must not be committed.
+
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65536
+MemoryMax=512M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polybot-v3-rd
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+[Unit]
+Description=Polybot V3 Trading Engine
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/polybot-v3
+ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Environment
+# /opt/polybot-v3/.env MUST contain the dual-flag live-mode gate + signal feed keys:
+#   POLYBOT_LIVE_MODE=true
+#   POLYBOT_LIVE_CONFIRM=true
+#   ODDS_API_KEY=...
+#   FRED_API_KEY=...
+#   TELEGRAM_BOT_TOKEN=... (optional, alerter no-ops without it)
+#   DASHBOARD_PASSWORD=...
+#   (wallet creds live in /opt/polybot-v3/state/api_keys.json, not .env)
+EnvironmentFile=/opt/polybot-v3/.env
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polybot-v3
+
+[Install]
+WantedBy=multi-user.target

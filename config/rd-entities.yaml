@@ -1,0 +1,31 @@
+# R&D Engine — Dale 2026-04-10: BOTH ENGINES LIVE.
+#
+# Historical context: R&D was paper-only for exploration. Dale's directive
+# post-rebuild: put both engines into live mode. R&D now runs live capital
+# across the full strategy space for exploration coverage (cash-preservation
+# weighter keeps all subs buying but throttles Avoid-tier subs to 0.15x).
+#
+# The wallet credentials for this engine live at:
+#   /opt/polybot-v3-rd/state/api_keys.json  (VPS, chmod 600, operator-placed)
+#
+# Entity starting_capital is a soft budget for initial funding. Dale funds
+# iteratively per Item 1 walk decision — never auto-triggered.
+
+entities:
+  - slug: rd-engine
+    name: "R&D Engine"
+    port: 9200
+    entity_path: /opt/polybot-v3-rd
+    mode: paper
+    status: active
+    starting_capital: 10000
+    strategies:
+      - weather_forecast
+      - crypto_price
+      - favorites
+      - longshot
+      - convergence
+      - sportsbook_fade
+      - cross_market
+      - macro_forecast
+      # value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/

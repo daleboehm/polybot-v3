@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<title>Gemini Capital — Trading Engine</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: linear-gradient(135deg, #0a0e17 0%, #111827 100%); color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow-x: hidden; }
+
+header { background: #0a0e17; border-bottom: 2px solid #f6ad55; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.header-left { display: flex; align-items: center; gap: 16px; }
+.header-left h1 { color: #f6ad55; font-size: 1.5em; font-weight: 700; }
+.header-left .subtitle { color: #718096; font-size: 0.8em; margin-top: 2px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.badge-paper { background: #f6ad55; color: #0a0e17; padding: 4px 14px; border-radius: 12px; font-weight: 700; font-size: 0.75em; letter-spacing: 0.05em; }
+.badge-v2 { background: #10b981; color: #0a0e17; padding: 4px 14px; border-radius: 12px; font-weight: 700; font-size: 0.75em; }
+.badge-live { background: #ef4444; color: white; padding: 4px 14px; border-radius: 12px; font-weight: 700; font-size: 0.75em; letter-spacing: 0.05em; }
+.logout-btn { background: #e8571f; border: none; color: white; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: 600; text-decoration: none; }
+.logout-btn:hover { background: #d63e0b; }
+
+.container { max-width: 1600px; margin: 0 auto; padding: 24px; }
+
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: nowrap; overflow-x: auto; }
+.sb-item { display: flex; flex-direction: column; }
+.sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 6px; }
+.sb-value { font-size: 22px; font-weight: 700; color: #e2e8f0; }
+.green { color: #10b981; }
+.red { color: #ef4444; }
+.orange { color: #f6ad55; }
+.blue { color: #3b82f6; }
+.cyan { color: #06b6d4; }
+.neutral { color: #718096; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+.section { background: #1a1f2e; border: 1px solid #2d3748; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.section h2 { color: #f6ad55; font-size: 1.05em; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 8px; }
+.section h2 .count { color: #718096; font-weight: 400; font-size: 0.85em; }
+
+.metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.metrics-grid.wide { grid-template-columns: repeat(3, 1fr); }
+.metric-box { background: #0f1117; border: 1px solid #2d3748; border-radius: 8px; padding: 12px; }
+.metric-box-label { display: block; font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.metric-box-value { display: block; font-size: 17px; font-weight: 600; color: #e2e8f0; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+th { text-align: left; color: #718096; font-weight: 600; padding: 10px 8px; border-bottom: 1px solid #2d3748; text-transform: uppercase; font-size: 0.7em; letter-spacing: 0.05em; background: #0f1117; position: sticky; top: 0; }
+td { padding: 9px 8px; border-bottom: 1px solid rgba(45,55,72,0.5); }
+tr:hover { background: rgba(15,17,23,0.6); }
+tr:last-child td { border-bottom: none; }
+
+.badge-sm { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 600; }
+.badge-go { background: #10b981; color: #0a0e17; }
+.badge-wait { background: #f6ad55; color: #0a0e17; }
+.badge-no { background: #ef4444; color: white; }
+.badge-paper-sm { background: #2563eb; color: #93c5fd; }
+.badge-live-sm { background: #166534; color: #86efac; }
+.strategy-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: 600; background: #2d3748; color: #a0aec0; }
+
+.events-log { max-height: 300px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; background: #0f1117; padding: 12px; border-radius: 8px; border: 1px solid #2d3748; }
+.events-log .event { padding: 4px 0; border-bottom: 1px solid #1a1f2e; }
+.events-log .ts { color: #4a5568; }
+
+.ws-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.ws-dot.on { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.ws-dot.off { background: #ef4444; }
+
+@media (max-width: 1200px) { .two-col { grid-template-columns: 1fr; } .scoreboard { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 768px) { header { flex-direction: column; gap: 12px; } .scoreboard { grid-template-columns: repeat(2, 1fr); } .metrics-grid, .metrics-grid.wide { grid-template-columns: 1fr; } }
+</style>
+</head><body>
+
+<header>
+  <div class="header-left">
+    <div>
+      <h1>Gemini Capital</h1>
+      <div class="subtitle" id="headerSubtitle">Loading...</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="modeBadge" class="badge-paper">Loading...</span>
+    <a href="/logout" class="logout-btn">Logout</a>
+  </div>
+</header>
+
+<div class="container">
+
+<!-- SCOREBOARD -->
+<div class="scoreboard" id="scoreboard"></div>
+
+<!-- ENGINE HEALTH -->
+<div class="section">
+  <h2>Engine Health</h2>
+  <div class="metrics-grid wide" id="engineHealth"></div>
+</div>
+
+<!-- ENTITIES TABLE -->
+<div class="section">
+  <h2>Entities <span class="count" id="entityCount"></span></h2>
+  <table>
+    <thead>
+      <tr><th>Entity</th><th>Mode</th><th>Status</th><th>Balance</th><th>P&L</th><th>Win Rate</th><th>W/L</th><th>Trades</th><th>Open Pos</th><th>Volume</th></tr>
+    </thead>
+    <tbody id="entitiesBody"></tbody>
+  </table>
+</div>
+
+<!-- STRATEGY PERFORMANCE (local engine) -->
+<div class="section">
+  <h2 id="localStrategiesHeader">Strategy Performance</h2>
+  <table>
+    <thead>
+      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Status</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th></tr>
+    </thead>
+    <tbody id="strategiesBody"></tbody>
+  </table>
+</div>
+
+<!-- R&D STRATEGY PERFORMANCE (prod dashboard only — hidden on R&D) -->
+<div class="section" id="rdStrategiesSection" style="display:none;">
+  <h2>R&D Strategy Performance <span class="count" style="font-size:0.75em;color:#718096;">(live data from R&D engine)</span></h2>
+  <table>
+    <thead>
+      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th></tr>
+    </thead>
+    <tbody id="rdStrategiesBody"></tbody>
+  </table>
+</div>
+
+<!-- RECOMMENDED TRADING STRATEGY -->
+<div class="section">
+  <h2>Recommended Trading Strategy <span class="count" style="font-size:0.75em;color:#718096;">(for Prod Engine)</span></h2>
+  <div id="strategyRecommendation"></div>
+</div>
+
+<!-- LIVE EVENTS -->
+<div class="section">
+  <h2>Live Events <span class="count" id="eventCount">(0)</span></h2>
+  <div class="events-log" id="eventsLog">
+    <div class="event"><span class="ts">--:--:--</span> Waiting for events...</div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<script>
+const API = '';
+let eventCounter = 0;
+
+function $(id) { return document.getElementById(id); }
+function fmt(v) { const s = Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); return v >= 0 ? `$${s}` : `-$${s}`; }
+function fmtK(v) { return `$${v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`; }
+function pnlCls(v) { return v > 0 ? 'green' : v < 0 ? 'red' : 'neutral'; }
+function pctStr(w, t) { return t > 0 ? ((w / t) * 100).toFixed(1) + '%' : '-'; }
+
+async function fetchJ(path) {
+  const r = await fetch(API + path);
+  if (r.status === 302 || r.redirected) { window.location.href = '/login'; return null; }
+  if (!r.ok) return null;
+  return r.json();
+}
+
+async function loadDashboard() {
+  const [status, entities, strategies, rdStrategies] = await Promise.all([
+    fetchJ('/api/status'), fetchJ('/api/entities'), fetchJ('/api/strategies'), fetchJ('/api/rd-strategies')
+  ]);
+  if (!status) return;
+
+  // Detect engine mode — R&D (all paper) vs Prod (has live entities)
+  const liveCount = entities.filter(e => e.mode === 'live').length;
+  const isRD = liveCount === 0;
+
+  // Update local strategy header and show/hide R&D section based on mode
+  $('localStrategiesHeader').textContent = isRD ? 'Strategy Performance' : 'Prod Strategy Performance';
+  const rdSection = $('rdStrategiesSection');
+  if (rdSection) {
+    rdSection.style.display = (!isRD && rdStrategies && rdStrategies.length > 0) ? 'block' : 'none';
+  }
+
+  // Dynamic title and badge
+  const title = isRD ? 'Gemini Capital R&D Engine' : 'Gemini Capital';
+  document.querySelector('.header-left h1').textContent = title;
+  document.title = title + ' — Trading Engine';
+  const mb = $('modeBadge');
+  if (isRD) { mb.textContent = 'PAPER'; mb.className = 'badge-paper'; }
+  else { mb.textContent = `${liveCount} LIVE`; mb.className = 'badge-live'; }
+
+  const now = new Date().toLocaleString();
+  $('headerSubtitle').textContent = `${now} \u00b7 Cycle ${status.cycles} \u00b7 ${status.strategies} strategies`;
+
+  // Aggregate entity metrics
+  const totalPnl = entities.reduce((s, e) => s + e.total_realized_pnl, 0);
+  const totalTrades = entities.reduce((s, e) => s + e.total_trades, 0);
+  const totalWins = entities.reduce((s, e) => s + e.total_wins, 0);
+  const totalLosses = entities.reduce((s, e) => s + e.total_losses, 0);
+  const totalVolume = entities.reduce((s, e) => s + e.total_volume, 0);
+  const totalOpen = entities.reduce((s, e) => s + e.open_positions, 0);
+  const activeCount = entities.filter(e => e.status === 'active').length;
+  const wr = (totalWins + totalLosses) > 0 ? (totalWins / (totalWins + totalLosses) * 100) : 0;
+
+  // Equity calculations
+  const totalCash = entities.reduce((s, e) => s + (e.current_cash || 0), 0);
+  const totalDeposit = entities.reduce((s, e) => s + (e.starting_capital || 0), 0);
+  const capitalDeployed = entities.reduce((s, e) => s + (e.open_positions_value || 0), 0);
+  const totalEquity = totalCash + capitalDeployed;
+  const pnlVsStart = totalEquity - totalDeposit;
+  const totalUpside = entities.reduce((s, e) => s + (e.total_upside || 0), 0);
+
+  // Scoreboard — matches entity dashboard pattern
+  $('scoreboard').innerHTML = `
+    <div class="sb-item"><span class="sb-label">Equity</span><span class="sb-value ${pnlCls(totalEquity - totalDeposit)}">${fmt(totalEquity)}</span></div>
+    <div class="sb-item"><span class="sb-label">Cash</span><span class="sb-value">${fmt(totalCash)}</span></div>
+    <div class="sb-item"><span class="sb-label">Capital Deployed</span><span class="sb-value orange">${fmt(capitalDeployed)}</span></div>
+    <div class="sb-item"><span class="sb-label">P&L vs Start</span><span class="sb-value ${pnlCls(pnlVsStart)}">${fmt(pnlVsStart)}</span></div>
+    <div class="sb-item"><span class="sb-label">Total Upside</span><span class="sb-value green">${fmt(totalUpside)}</span></div>
+    <div class="sb-item"><span class="sb-label">Win Rate</span><span class="sb-value ${wr > 50 ? 'green' : wr > 30 ? 'orange' : 'red'}">${wr.toFixed(1)}%</span></div>
+    <div class="sb-item"><span class="sb-label">W / L</span><span class="sb-value"><span class="green">${totalWins}</span> / <span class="red">${totalLosses}</span></span></div>
+    <div class="sb-item"><span class="sb-label">Total Trades</span><span class="sb-value cyan">${totalTrades.toLocaleString()}</span></div>
+    <div class="sb-item"><span class="sb-label">Open Positions</span><span class="sb-value orange">${totalOpen}</span></div>
+  `;
+
+  // Engine Health
+  $('engineHealth').innerHTML = `
+    <div class="metric-box"><span class="metric-box-label">Engine Status</span><span class="metric-box-value ${status.running ? 'green' : 'red'}">${status.running ? 'Running' : 'Stopped'}</span></div>
+    <div class="metric-box"><span class="metric-box-label">Scan Cycles</span><span class="metric-box-value blue">${status.cycles.toLocaleString()}</span></div>
+    <div class="metric-box"><span class="metric-box-label">Active Entities</span><span class="metric-box-value">${activeCount} / ${entities.length}</span></div>
+    <div class="metric-box"><span class="metric-box-label">Strategies</span><span class="metric-box-value">${status.strategies}</span></div>
+    <div class="metric-box"><span class="metric-box-label">Markets Tracked</span><span class="metric-box-value green">${status.markets_active.toLocaleString()}</span></div>
+    <div class="metric-box"><span class="metric-box-label">Events Emitted</span><span class="metric-box-value">${Object.values(status.event_stats || {}).reduce((s,v) => s+v, 0).toLocaleString()}</span></div>
+  `;
+
+  // Entities table
+  $('entityCount').textContent = `(${entities.length})`;
+  $('entitiesBody').innerHTML = entities.map(e => {
+    const wr = (e.total_wins + e.total_losses) > 0 ? ((e.total_wins / (e.total_wins + e.total_losses)) * 100).toFixed(1) + '%' : '-';
+    const modeBadge = e.mode === 'live' ? '<span class="badge-sm badge-live-sm">LIVE</span>' : '<span class="badge-sm badge-paper-sm">PAPER</span>';
+    const statusBadge = e.status === 'active' ? '<span class="badge-sm badge-go">active</span>' : e.status === 'pending' ? '<span class="badge-sm badge-wait">pending</span>' : '<span class="badge-sm badge-no">' + e.status + '</span>';
+    const bal = (e.current_cash || 0) + (e.reserve_balance || 0);
+    return `<tr>
+      <td><a href="/entity/${e.slug}" style="color:#e2e8f0;text-decoration:none"><strong>${e.name}</strong></a><br><small style="color:#4a5568">${e.slug}</small></td>
+      <td>${modeBadge}</td>
+      <td>${statusBadge}</td>
+      <td>${fmt(bal)}</td>
+      <td class="${pnlCls(e.total_realized_pnl)}">${fmt(e.total_realized_pnl)}</td>
+      <td>${wr}</td>
+      <td><span class="green">${e.total_wins}</span>/<span class="red">${e.total_losses}</span></td>
+      <td>${e.total_trades.toLocaleString()}</td>
+      <td>${e.open_positions}</td>
+      <td>${fmtK(e.total_volume)}</td>
+    </tr>`;
+  }).join('');
+
+  // Strategy performance — always show all 8 strategies
+  // Strategy performance table — iterate rows directly from API (one row per strategy+sub-strategy pair)
+  const sortedStrategies = (strategies || []).slice().sort((a, b) => {
+    const aKey = a.strategy_id + '|' + (a.sub_strategy_id || '');
+    const bKey = b.strategy_id + '|' + (b.sub_strategy_id || '');
+    return aKey.localeCompare(bKey);
+  });
+
+  if (sortedStrategies.length === 0) {
+    $('strategiesBody').innerHTML = '<tr><td colspan="12" style="text-align:center;color:#718096">No strategy data yet</td></tr>';
+  } else {
+    $('strategiesBody').innerHTML = sortedStrategies.map(s => {
+      const hasData = s.total_trades > 0;
+      const statusBadge = hasData
+        ? '<span class="badge-sm badge-go">active</span>'
+        : '<span class="badge-sm badge-wait">waiting</span>';
+      const wrCls = s.total_resolutions > 0 ? (s.win_rate > 50 ? 'green' : s.win_rate > 30 ? 'orange' : 'red') : 'neutral';
+      const wrText = s.total_resolutions > 0 ? s.win_rate.toFixed(1) + '%' : '-';
+      const subLabel = s.sub_strategy_id ? `<span class="strategy-tag" style="background:#1e293b;color:#94a3b8">${s.sub_strategy_id}</span>` : '<span style="color:#4a5568">—</span>';
+      return `<tr>
+        <td><span class="strategy-tag">${s.strategy_id}</span></td>
+        <td>${subLabel}</td>
+        <td>${statusBadge}</td>
+        <td>${s.total_trades || 0}</td>
+        <td class="orange">${s.open_positions || 0}</td>
+        <td>${fmt(s.open_cost_basis || 0)}</td>
+        <td class="green">${fmt(s.open_upside || 0)}</td>
+        <td>${s.total_resolutions || 0}</td>
+        <td><span class="green">${s.wins || 0}</span>/<span class="red">${s.losses || 0}</span></td>
+        <td class="${wrCls}">${wrText}</td>
+        <td class="${pnlCls(s.total_pnl || 0)}">${fmt(s.total_pnl || 0)}</td>
+        <td>${fmtK(s.total_volume || 0)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // R&D Strategy Performance table — only rendered on prod (rdSection hidden on R&D)
+  if (!isRD && rdStrategies && rdStrategies.length > 0) {
+    const sortedRd = rdStrategies.slice().sort((a, b) => {
+      const aKey = a.strategy_id + '|' + (a.sub_strategy_id || '');
+      const bKey = b.strategy_id + '|' + (b.sub_strategy_id || '');
+      return aKey.localeCompare(bKey);
+    });
+    $('rdStrategiesBody').innerHTML = sortedRd.map(s => {
+      const wrCls = s.total_resolutions > 0 ? (s.win_rate > 50 ? 'green' : s.win_rate > 30 ? 'orange' : 'red') : 'neutral';
+      const wrText = s.total_resolutions > 0 ? s.win_rate.toFixed(1) + '%' : '-';
+      const subLabel = s.sub_strategy_id ? `<span class="strategy-tag" style="background:#1e293b;color:#94a3b8">${s.sub_strategy_id}</span>` : '<span style="color:#4a5568">—</span>';
+      return `<tr>
+        <td><span class="strategy-tag">${s.strategy_id}</span></td>
+        <td>${subLabel}</td>
+        <td>${s.total_trades || 0}</td>
+        <td class="orange">${s.open_positions || 0}</td>
+        <td>${fmt(s.open_cost_basis || 0)}</td>
+        <td class="green">${fmt(s.open_upside || 0)}</td>
+        <td>${s.total_resolutions || 0}</td>
+        <td><span class="green">${s.wins || 0}</span>/<span class="red">${s.losses || 0}</span></td>
+        <td class="${wrCls}">${wrText}</td>
+        <td class="${pnlCls(s.total_pnl || 0)}">${fmt(s.total_pnl || 0)}</td>
+        <td>${fmtK(s.total_volume || 0)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Recommended Trading Strategy — on prod, use R&D data (that's what the advisor uses)
+  // On R&D, use local strategy data
+  const recSource = (!isRD && rdStrategies && rdStrategies.length > 0) ? rdStrategies : sortedStrategies;
+  const recSorted = recSource.slice().sort((a, b) => {
+    const aKey = a.strategy_id + '|' + (a.sub_strategy_id || '');
+    const bKey = b.strategy_id + '|' + (b.sub_strategy_id || '');
+    return aKey.localeCompare(bKey);
+  });
+  const recs = recSorted.map(s => {
+    const trades = s.total_trades || 0;
+    const resolved = s.total_resolutions || 0;
+    const wr = resolved > 0 ? s.win_rate : null;
+    const pnl = s.total_pnl || 0;
+    const upside = s.open_upside || 0;
+    const deployed = s.open_cost_basis || 0;
+    const upsideRatio = deployed > 0 ? upside / deployed : 0;
+    const label = s.sub_strategy_id ? `${s.strategy_id}.${s.sub_strategy_id}` : s.strategy_id;
+
+    let verdict, verdictCls, reasoning;
+    if (trades === 0) {
+      verdict = 'NO DATA'; verdictCls = 'neutral';
+      reasoning = 'No trades placed yet. Waiting for signal generation.';
+    } else if (resolved === 0) {
+      verdict = 'COLLECTING'; verdictCls = 'blue';
+      reasoning = `${trades} trades placed, ${s.open_positions || 0} open. Upside ratio: ${upsideRatio.toFixed(1)}x. Awaiting resolutions.`;
+    } else if (wr >= 60 && pnl > 0) {
+      verdict = 'DEPLOY'; verdictCls = 'green';
+      reasoning = `${wr.toFixed(0)}% WR, ${fmt(pnl)} profit over ${resolved} resolved. Strong candidate for Prod.`;
+    } else if (wr >= 40 && pnl >= 0) {
+      verdict = 'MONITOR'; verdictCls = 'orange';
+      reasoning = `${wr.toFixed(0)}% WR, ${fmt(pnl)} P&L. Marginal — needs more data.`;
+    } else {
+      verdict = 'AVOID'; verdictCls = 'red';
+      reasoning = `${wr !== null ? wr.toFixed(0) + '% WR' : 'No resolutions'}, ${fmt(pnl)} P&L. Do not deploy.`;
+    }
+    return { label, verdict, verdictCls, reasoning, trades, resolved, upsideRatio };
+  });
+
+  $('strategyRecommendation').innerHTML = `
+    <table>
+      <thead><tr><th>Strategy</th><th>Verdict</th><th>Data Points</th><th>Upside Ratio</th><th>Reasoning</th></tr></thead>
+      <tbody>${recs.map(r => `<tr>
+        <td><span class="strategy-tag">${r.label}</span></td>
+        <td><span class="badge-sm" style="background:${r.verdictCls === 'green' ? '#10b981' : r.verdictCls === 'red' ? '#ef4444' : r.verdictCls === 'orange' ? '#f6ad55' : r.verdictCls === 'blue' ? '#3b82f6' : '#4a5568'}; color:${r.verdictCls === 'orange' ? '#0a0e17' : 'white'}">${r.verdict}</span></td>
+        <td>${r.trades} trades / ${r.resolved} resolved</td>
+        <td>${r.upsideRatio > 0 ? r.upsideRatio.toFixed(1) + 'x' : '-'}</td>
+        <td style="font-size:0.85em;color:#a0aec0">${r.reasoning}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
+
+// SSE
+function connectSSE() {
+  const es = new EventSource(API + '/events');
+  const log = $('eventsLog');
+
+  es.onopen = () => { addEvent('SSE connected', 'green'); };
+
+  es.addEventListener('engine:cycle_complete', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`Cycle ${d.cycle}: ${d.signals} signals, ${d.orders} orders (${d.duration_ms}ms)`, 'cyan');
+    loadDashboard();
+  });
+  es.addEventListener('order:filled', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`FILL: ${d.fill.side} ${d.fill.outcome} @ ${d.fill.price.toFixed(2)} ($${d.fill.usdc_size.toFixed(2)}) [${d.fill.entity_slug}]`, d.fill.side === 'BUY' ? 'green' : 'orange');
+  });
+  es.addEventListener('signal:approved', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`SIGNAL: ${d.decision.signal.strategy_id} → ${d.decision.signal.outcome} edge=${d.decision.signal.edge.toFixed(3)} size=$${d.decision.final_size_usd.toFixed(2)}`, 'blue');
+  });
+  es.addEventListener('signal:rejected', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`REJECTED: ${d.signal.strategy_id} — ${d.reason}`, 'neutral');
+  });
+  es.addEventListener('risk:lockout', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`LOCKOUT: ${d.entity_slug} — ${d.reason}`, 'red');
+  });
+  es.addEventListener('risk:unlocked', (e) => {
+    const d = JSON.parse(e.data);
+    addEvent(`UNLOCKED: ${d.entity_slug}`, 'green');
+  });
+  es.addEventListener('market:discovered', () => { /* too noisy */ });
+
+  es.onerror = () => { addEvent('SSE disconnected — reconnecting...', 'red'); };
+
+  function addEvent(text, color) {
+    eventCounter++;
+    $('eventCount').textContent = `(${eventCounter})`;
+    const ts = new Date().toLocaleTimeString();
+    const cls = color ? ` style="color:var(--c)"`.replace('var(--c)', color === 'green' ? '#10b981' : color === 'red' ? '#ef4444' : color === 'orange' ? '#f6ad55' : color === 'blue' ? '#3b82f6' : color === 'cyan' ? '#06b6d4' : '#718096') : '';
+    log.innerHTML = `<div class="event"><span class="ts">${ts}</span> <span${cls}>${text}</span></div>` + log.innerHTML;
+    while (log.children.length > 200) log.lastChild.remove();
+  }
+}
+
+loadDashboard();
+setInterval(loadDashboard, 60000);
+connectSSE();
+</script>
+</body></html>

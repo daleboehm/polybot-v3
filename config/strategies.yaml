@@ -1,0 +1,31 @@
+# Strategy Registry — add your strategies here after implementing BaseStrategy
+# Each strategy maps to a class in src/strategy/custom/
+
+strategies: []
+
+# Example format (uncomment and customize when adding strategies):
+#
+# strategies:
+#   - id: favorites
+#     name: "Favorites"
+#     description: "Buy high-probability outcomes near resolution"
+#     enabled: true
+#     params:
+#       min_yes_price: 0.90
+#       max_positions: 5
+#
+#   - id: mean_revert
+#     name: "Mean Reversion"
+#     description: "Fade sharp price moves in liquid markets"
+#     enabled: true
+#     params:
+#       lookback_hours: 24
+#       revert_threshold: 0.10
+#
+#   - id: arb_scanner
+#     name: "Arbitrage Scanner"
+#     description: "Detect YES+NO < $1 mispricing"
+#     enabled: true
+#     params:
+#       min_spread: 0.005
+#       max_slippage: 0.01

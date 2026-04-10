@@ -1,0 +1,61 @@
+engine:
+  scan_interval_ms: 300000        # 5 minutes
+  snapshot_interval_ms: 3600000   # 1 hour
+  risk_check_interval_ms: 60000   # 1 minute
+  orderbook_subscribe: true
+  max_concurrent_orders: 5
+  log_level: info
+
+risk:
+  max_position_pct: 0.10          # 10% of trading balance
+  max_position_usd: 20.00
+  fractional_kelly: 0.25
+  daily_loss_lockout_usd: 20.00
+  stop_loss_pct: 0.20             # -20%
+  hard_stop_usd: 5.00
+  profit_target_pct: 0.40         # +40%
+  reserve_ratio: 0.60
+  trading_ratio: 0.40
+  min_edge_threshold: 0.02        # 2% minimum edge
+  min_hold_hours: 6
+  # Dale 2026-04-10: prod must NOT buy anything that resolves past 48 hours.
+  # "I need to keep the capital moving." Enforced by strategy-context.ts
+  # getActiveMarkets() — strategies don't even see markets outside this window,
+  # so no signal is generated, no order is placed. Existing positions stay
+  # (they were opened before this rule and will resolve on their own).
+  min_hours_to_resolve: 1
+  max_hours_to_resolve: 48
+  tiered_stops:
+    - max_entry: 1.00
+      min_entry: 0.50
+      stop_pct: 0.30
+    - max_entry: 0.50
+      min_entry: 0.20
+      stop_pct: 0.50
+    - max_entry: 0.20
+      min_entry: 0.10
+      stop_pct: 0.60
+    - max_entry: 0.10
+      min_entry: 0.00
+      stop_pct: null              # no stop for cheap binary bets
+
+execution:
+  slippage_bps: 50                # 0.5% slippage model for paper
+  bid_premium_pct: 0.02           # bid 2% above market for fills
+  max_retries: 3
+  retry_delay_ms: 2000
+  paper_fill_delay_ms: 500
+
+api:
+  clob_base_url: https://clob.polymarket.com
+  data_api_base_url: https://data-api.polymarket.com
+  ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+  rate_limit_per_second: 10
+
+dashboard:
+  port: 9100
+  auth_enabled: true
+  # auth_user and auth_password set via .env
+
+database:
+  path: ./data/polybot.db

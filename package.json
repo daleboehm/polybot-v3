@@ -1,0 +1,44 @@
+{
+  "name": "polybot-v3",
+  "version": "3.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "build": "tsc && cp -r src/dashboard/static dist/dashboard/",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "cli": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check src/",
+    "format": "biome format --write src/",
+    "migrate": "tsx src/cli/index.ts migrate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@polymarket/clob-client": "^5.8.1",
+    "better-sqlite3": "^11.7.0",
+    "chokidar": "^4.0.0",
+    "commander": "^13.1.0",
+    "dotenv": "^17.0.0",
+    "js-yaml": "^4.1.0",
+    "nanoid": "^5.1.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "viem": "^2.46.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

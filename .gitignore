@@ -1,0 +1,69 @@
+# ─── Secrets (NEVER commit) ────────────────────────────────────
+.env
+.env.*
+!.env.example
+api_keys.json
+wallet.json
+*.key
+*.pem
+dashboard_creds.json
+credentials.json
+/opt/polybot-secrets/
+/dev/shm/polybot-secrets/
+
+# ─── Build output (rebuild on each deploy) ─────────────────────
+dist/
+*.tsbuildinfo
+
+# ─── Dependencies ──────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── Runtime state (VPS-only, never in source) ─────────────────
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-journal
+
+# ─── Archives + backups ────────────────────────────────────────
+archive/
+backup/
+*.bak
+*.backup
+
+# ─── Logs ──────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+*.pid
+
+# ─── OS / editor noise ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+
+# ─── v1/v2 legacy (should not be in this directory, but defensive) ─
+auto_redeem.py
+old/
+legacy/
+
+# ─── Coverage + test artifacts ─────────────────────────────────
+coverage/
+.nyc_output/
+*.lcov
+
+# ─── Temp / build scratch ──────────────────────────────────────
+tmp/
+temp/
+.cache/
