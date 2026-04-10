@@ -38,7 +38,9 @@ import { FredClient } from '../market/fred-client.js';
 // value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/README.md
 import { upsertPosition, closePosition, updatePositionPrice } from '../storage/repositories/position-repo.js';
 import { insertSnapshot } from '../storage/repositories/snapshot-repo.js';
+import { insertResolution } from '../storage/repositories/resolution-repo.js';
 import { getOpenPositionCount, getOpenPositions, getAllOpenPositions } from '../storage/repositories/position-repo.js';
+import type { Outcome } from '../types/index.js';
 import type { ExitSignal } from '../risk/stop-loss-monitor.js';
 import { PaperResolver } from '../market/paper-resolver.js';
 import { nanoid } from 'nanoid';
@@ -716,6 +718,46 @@ export class Engine {
       // Record realized P&L (difference between proceeds and cost basis)
       const realizedPnl = fill.net_usdc - pos.cost_basis;
       this.dailyLossGuard.recordPnl(entity.config.slug, realizedPnl);
+
+      // 2026-04-10: exits are P&L events too — write a resolution row so the
+      // dashboard W/L, win-rate, and strategy-performance views include them.
+      // Previously only market-resolution closures (paper-resolver and
+      // on-chain-reconciler) wrote to `resolutions`, so every stop-loss /
+      // profit-target / hard-stop exit was invisible to the stats (R&D had
+      // 18 closed positions and zero resolution rows, prod had 0 wins / 18
+      // losses because only absent_from_api close rows existed).
+      //
+      // Semantics for a sell-exit: the market didn't resolve, we sold into
+      // the book. winning_outcome is ambiguous in the usual sense, so we
+      // record the position_side and let the sign of realized_pnl drive the
+      // win/loss classification downstream (realized_pnl > 0 → win).
+      try {
+        insertResolution({
+          entity_slug: entity.config.slug,
+          condition_id: exit.condition_id,
+          token_id: exit.token_id,
+          winning_outcome: pos.side as Outcome,
+          position_side: pos.side as Outcome,
+          size: pos.size,
+          payout_usdc: 0, // this is a sell-exit, not a redemption
+          cost_basis_usdc: pos.cost_basis,
+          sell_proceeds_usdc: fill.net_usdc,
+          realized_pnl: realizedPnl,
+          is_paper: entity.config.mode === 'paper',
+          strategy_id: pos.strategy_id ?? 'stop_loss_monitor',
+          sub_strategy_id: pos.sub_strategy_id ?? undefined,
+          market_question: pos.market_question ?? '',
+          market_slug: pos.market_slug ?? '',
+          tx_hash: null,
+          resolved_at: new Date(),
+        });
+      } catch (err) {
+        log.error(
+          { entity: entity.config.slug, condition: exit.condition_id, err: err instanceof Error ? err.message : String(err) },
+          'Failed to insert exit resolution row — position will still close but W/L stats will miss this event',
+        );
+      }
+
       // Close the DB position
       closePosition(entity.config.slug, exit.condition_id, exit.token_id, 'closed');
     }

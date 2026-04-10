@@ -137,11 +137,22 @@ export class OnChainReconciler {
       if (!api) {
         // Not in active API → the on-chain position no longer exists.
         // It was either redeemed off-chain (manual Polymarket redemption or
-        // external flow) or never existed. Close in DB with payout=0; the
-        // actual cash credit already happened on-chain and will be reflected
-        // in the wallet's USDC balance at the next wallet sync.
-        await this.closeDbPosition(dbPos, 'absent_from_api', 0);
-        result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: 0 });
+        // external flow) or never existed. The actual cash credit already
+        // happened on-chain and will be reflected in the wallet's USDC
+        // balance at the next wallet sync — we do NOT touch cash_balance here.
+        //
+        // 2026-04-10: we DO care about the payout for accounting purposes —
+        // the `resolutions` table feeds the dashboard's W/L and win-rate views.
+        // Previously every close_absent wrote payout_usdc=0, which turned
+        // actual wins into fake losses on the dashboard (prod had 0 wins / 18
+        // losses because every single close-absent row was a 100% loss on
+        // paper). Fix: query CLOB /markets/{cid} to discover the winning token
+        // and compute the correct payout. If CLOB can't resolve the winner
+        // (unresolved market, 404, network error), fall back to payout=0 and
+        // log at warn level so we can see how often this happens.
+        const payout = await this.computeAbsentPayout(dbPos);
+        await this.closeDbPosition(dbPos, 'absent_from_api', payout);
+        result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payout });
         apiByAsset.delete(dbPos.token_id);
         continue;
       }
@@ -293,5 +304,81 @@ export class OnChainReconciler {
     // debug log. Multi-outcome support comes in R2 when we drop the positions.side CHECK.
     log.debug({ raw: s }, 'Non-binary outcome string — defaulting to YES');
     return 'YES' as Outcome;
+  }
+
+  /**
+   * Determine the payout for a position being closed as absent_from_api.
+   *
+   * When a position disappears from the Data API's active list, we don't
+   * inherently know whether it redeemed as a winner (payout = size × $1.00)
+   * or a loser (payout = $0). Querying CLOB `/markets/{conditionId}` gives us
+   * the `tokens[].winner` flag which is the authoritative source.
+   *
+   * Rules:
+   *   - If the market is closed AND CLOB flags a winner AND dbPos.token_id
+   *     matches the winner → payout = dbPos.size (1 USDC per share).
+   *   - If the market is closed AND a winner exists but dbPos.token_id is NOT
+   *     the winner → payout = 0 (the position lost).
+   *   - If the market is not yet closed, or CLOB doesn't know the winner, or
+   *     the fetch fails → payout = 0 with a warn log. This matches the old
+   *     behavior but is now the exception, not the rule.
+   *
+   * This is called from the sync reconciliation loop, so it blocks. In
+   * practice close_absent is rare per-cycle, but during a big resolution wave
+   * (e.g. a single weather day resolving 20+ positions) there could be many
+   * consecutive calls. The CLOB client has its own rate limiting; we accept
+   * the serialization cost because correctness matters more than cycle speed.
+   */
+  private async computeAbsentPayout(dbPos: PositionRow): Promise<number> {
+    try {
+      const resp = await fetch(
+        `https://clob.polymarket.com/markets/${encodeURIComponent(dbPos.condition_id)}`,
+        { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) },
+      );
+      if (!resp.ok) {
+        log.warn(
+          { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16), status: resp.status },
+          'CLOB winner lookup returned non-200 — falling back to payout=0 (may misclassify a win)',
+        );
+        return 0;
+      }
+      const data = (await resp.json()) as { closed?: boolean; tokens?: Array<{ token_id: string; winner?: boolean }> };
+      if (!data.closed) {
+        log.warn(
+          { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16) },
+          'Position absent from API but CLOB says market still open — falling back to payout=0 (unexpected state)',
+        );
+        return 0;
+      }
+      const winnerToken = data.tokens?.find((t) => t.winner === true);
+      if (!winnerToken) {
+        log.warn(
+          { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16) },
+          'Market closed but CLOB reports no winner token — falling back to payout=0',
+        );
+        return 0;
+      }
+      const didWin = winnerToken.token_id === dbPos.token_id;
+      const payout = didWin ? dbPos.size : 0;
+      log.info(
+        {
+          entity: dbPos.entity_slug,
+          condition: dbPos.condition_id.substring(0, 16),
+          didWin,
+          payout,
+          costBasis: dbPos.cost_basis,
+          realizedPnl: payout - dbPos.cost_basis,
+        },
+        'close_absent payout computed from CLOB winner',
+      );
+      return payout;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16), err: msg },
+        'CLOB winner lookup threw — falling back to payout=0',
+      );
+      return 0;
+    }
   }
 }
