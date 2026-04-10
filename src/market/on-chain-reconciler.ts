@@ -1,10 +1,12 @@
 // On-chain position reconciler — v3 source of truth for resolved positions.
 //
-// Replaces the Gamma-polling resolution-checker (which had 4 compounding bugs per the
-// 2026-04-09 audit: wrong plural param name, unvalidated response shape, silent null
-// paths in parseGammaResolution, and v1 cron wallet drainage divergence).
+// Queries the Polymarket Data API's /positions?user=... endpoint for each entity's
+// proxy wallet and reconciles its output against the v3 DB. This replaced a flawed
+// Gamma-polling approach (4 compounding bugs per the 2026-04-09 audit: wrong plural
+// param name, unvalidated response shape, silent null paths in parseGammaResolution,
+// and divergence between the engine's DB view and the actual wallet state).
 //
-// The new mechanism: query the Polymarket Data API's /positions?user=... endpoint for
+// The mechanism: query the Polymarket Data API's /positions?user=... endpoint for
 // each entity's proxy wallet, which returns the wallet's on-chain position state
 // directly. Any divergence from our DB is a fact we must reconcile:
 //
@@ -134,9 +136,9 @@ export class OnChainReconciler {
 
       if (!api) {
         // Not in active API → the on-chain position no longer exists.
-        // It was either redeemed off-chain (v1 auto_redeem cron or manual
-        // Polymarket redemption) or never existed. Close in DB with payout=0;
-        // the actual cash credit already happened on-chain and will be reflected
+        // It was either redeemed off-chain (manual Polymarket redemption or
+        // external flow) or never existed. Close in DB with payout=0; the
+        // actual cash credit already happened on-chain and will be reflected
         // in the wallet's USDC balance at the next wallet sync.
         await this.closeDbPosition(dbPos, 'absent_from_api', 0);
         result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: 0 });

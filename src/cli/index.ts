@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Polybot V2 CLI — management interface
+// Polybot V3 CLI — management interface
 
 import { Command } from 'commander';
 import { loadConfig } from '../config/loader.js';
@@ -143,26 +143,17 @@ program
   });
 
 // ─── MIGRATE ────────────────────────────────────────────────
+// 2026-04-10: stripped v1 import flags. v1 is dead per Dale's directive, and the
+// v1-import helper module has been deleted. This command now only initializes
+// a fresh v3 schema on a new database.
 program
   .command('migrate')
-  .description('Initialize schema or import v1 data')
-  .option('--init', 'Initialize fresh schema')
-  .option('--v1', 'Import v1 data from existing databases')
-  .option('--v1-path <path>', 'Path to v1 portfolio.db', '/opt/polybot/db/portfolio.db')
-  .action(async (opts) => {
+  .description('Initialize fresh schema on a v3 database')
+  .action(async () => {
     const config = loadConfig();
     const db = initDatabase(config.database.path);
-
-    if (opts.init || !opts.v1) {
-      applySchema(db);
-      console.log('Schema initialized');
-    }
-
-    if (opts.v1) {
-      console.log(`V1 migration from ${opts.v1Path} — not yet implemented`);
-      console.log('Run: tsx src/storage/migration/v1-import.ts');
-    }
-
+    applySchema(db);
+    console.log('Schema initialized');
     closeDatabase();
   });
 

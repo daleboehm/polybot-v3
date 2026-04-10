@@ -1,13 +1,25 @@
 # Polybot V3 — 16 Entity Registry
 # All entities start in paper mode. Toggle to live via CLI with dual-flag safety.
-# Credentials read from each entity's /opt/{slug}/state/api_keys.json (read-only)
-# R2 PR#1 (2026-04-10): value/skew/complement strategies removed — see strategy/archive/
+#
+# entity_path semantics:
+# - Live entities (polybot): entity_path must point at a directory containing
+#   state/api_keys.json (or api_keys.json directly). The v3 prod entity uses
+#   /opt/polybot-v3/ with api_keys.json symlinked to /dev/shm/polybot-secrets/
+#   on the VPS for tmpfs-only credential storage.
+# - Paper entities: entity_path is cosmetic — the wallet loader will log
+#   "No wallet credentials found" and return null, which is fine because paper
+#   mode doesn't trade live. These point at /opt/polybot-v3/paper-entities/{slug}/
+#   so there's no cross-reference to v1/v2 legacy directories.
+#
+# R2 PR#1 (2026-04-10): value/skew/complement strategies quarantined — see strategy/archive/
+# R3c (2026-04-10): v1/v2 legacy paths fully removed; all entity_path values
+#   live under /opt/polybot-v3/ or are cosmetic placeholders for paper entities.
 
 entities:
   - slug: polybot
     name: "GC Caspian"
     port: 8080
-    entity_path: /opt/polybot
+    entity_path: /opt/polybot-v3
     mode: live
     status: active
     starting_capital: 500.00
@@ -24,7 +36,7 @@ entities:
   - slug: armorstack
     name: "GC Armorstack"
     port: 8081
-    entity_path: /opt/armorstack
+    entity_path: /opt/polybot-v3/paper-entities/armorstack
     mode: paper
     status: pending
     starting_capital: 0
@@ -33,7 +45,7 @@ entities:
   - slug: lilac
     name: "GC Lilac Ventures"
     port: 8082
-    entity_path: /opt/lilac
+    entity_path: /opt/polybot-v3/paper-entities/lilac
     mode: paper
     status: pending
     starting_capital: 0
@@ -42,7 +54,7 @@ entities:
   - slug: caspian-intl
     name: "GC Caspian International"
     port: 8083
-    entity_path: /opt/caspian-intl
+    entity_path: /opt/polybot-v3/paper-entities/caspian-intl
     mode: paper
     status: pending
     starting_capital: 0
@@ -51,7 +63,7 @@ entities:
   - slug: armorstack-tax
     name: "GC Armorstack Tax Reserve"
     port: 8084
-    entity_path: /opt/armorstack-tax
+    entity_path: /opt/polybot-v3/paper-entities/armorstack-tax
     mode: paper
     status: pending
     starting_capital: 0
@@ -60,7 +72,7 @@ entities:
   - slug: armorstack-marketing
     name: "GC Armorstack Marketing"
     port: 8085
-    entity_path: /opt/armorstack-marketing
+    entity_path: /opt/polybot-v3/paper-entities/armorstack-marketing
     mode: paper
     status: pending
     starting_capital: 0
@@ -69,7 +81,7 @@ entities:
   - slug: armorstack-te
     name: "GC Armorstack T&E"
     port: 8086
-    entity_path: /opt/armorstack-te
+    entity_path: /opt/polybot-v3/paper-entities/armorstack-te
     mode: paper
     status: pending
     starting_capital: 0
@@ -78,7 +90,7 @@ entities:
   - slug: boehm-family
     name: "GC Boehm Family Trust"
     port: 8087
-    entity_path: /opt/boehm-family
+    entity_path: /opt/polybot-v3/paper-entities/boehm-family
     mode: paper
     status: pending
     starting_capital: 0
@@ -87,7 +99,7 @@ entities:
   - slug: nolan-fund
     name: "GC Nolan Education Fund"
     port: 8088
-    entity_path: /opt/nolan-fund
+    entity_path: /opt/polybot-v3/paper-entities/nolan-fund
     mode: paper
     status: pending
     starting_capital: 0
@@ -96,7 +108,7 @@ entities:
   - slug: landon-fund
     name: "GC Landon Education Fund"
     port: 8089
-    entity_path: /opt/landon-fund
+    entity_path: /opt/polybot-v3/paper-entities/landon-fund
     mode: paper
     status: pending
     starting_capital: 0
@@ -105,7 +117,7 @@ entities:
   - slug: artisan179
     name: "GC Artisan 179 LLC"
     port: 8090
-    entity_path: /opt/artisan179
+    entity_path: /opt/polybot-v3/paper-entities/artisan179
     mode: paper
     status: pending
     starting_capital: 0
@@ -114,7 +126,7 @@ entities:
   - slug: sage-holdings
     name: "GC Sage Holdings"
     port: 8091
-    entity_path: /opt/sage-holdings
+    entity_path: /opt/polybot-v3/paper-entities/sage-holdings
     mode: paper
     status: pending
     starting_capital: 0
@@ -123,7 +135,7 @@ entities:
   - slug: midwest-ai
     name: "GC Midwest AI Fund"
     port: 8092
-    entity_path: /opt/midwest-ai
+    entity_path: /opt/polybot-v3/paper-entities/midwest-ai
     mode: paper
     status: pending
     starting_capital: 0
@@ -132,7 +144,7 @@ entities:
   - slug: weather-alpha
     name: "GC Weather Alpha"
     port: 8093
-    entity_path: /opt/weather-alpha
+    entity_path: /opt/polybot-v3/paper-entities/weather-alpha
     mode: paper
     status: pending
     starting_capital: 0
@@ -141,7 +153,7 @@ entities:
   - slug: delta-neutral
     name: "GC Delta Neutral"
     port: 8094
-    entity_path: /opt/delta-neutral
+    entity_path: /opt/polybot-v3/paper-entities/delta-neutral
     mode: paper
     status: pending
     starting_capital: 0
@@ -150,7 +162,7 @@ entities:
   - slug: a-brown
     name: "GC A Brown"
     port: 8097
-    entity_path: /opt/a-brown
+    entity_path: /opt/polybot-v3/paper-entities/a-brown
     mode: paper
     status: pending
     starting_capital: 0

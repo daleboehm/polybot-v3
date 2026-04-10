@@ -182,12 +182,12 @@ export class Engine {
       }
 
       // STARTUP WALLET SYNC: read on-chain USDC balance via viem and overwrite
-      // entity.cash_balance with the ground truth. v2's DB cash_balance goes
-      // stale whenever positions resolve off-chain (via v1 auto_redeem cron or
-      // any direct redemption) because the engine doesn't see the wallet delta.
-      // Reading on-chain USDC at startup makes the v3 engine's view match
-      // reality. After this, per-scan reconciliation only manages position
-      // state (never touches cash_balance) so the sync point is deterministic.
+      // entity.cash_balance with the ground truth. The DB cash_balance can go
+      // stale whenever positions resolve off-chain or any manual redemption
+      // happens, because the engine doesn't automatically see the wallet delta.
+      // Reading on-chain USDC at startup makes the engine's view match reality.
+      // After this, per-scan reconciliation only manages position state (never
+      // touches cash_balance) so the sync point is deterministic.
       try {
         const redeemer = this.getRedeemer(entity.config.slug);
         if (redeemer && entity.config.mode === 'live') {
