@@ -141,18 +141,34 @@ export class OnChainReconciler {
         // happened on-chain and will be reflected in the wallet's USDC
         // balance at the next wallet sync — we do NOT touch cash_balance here.
         //
-        // 2026-04-10: we DO care about the payout for accounting purposes —
-        // the `resolutions` table feeds the dashboard's W/L and win-rate views.
-        // Previously every close_absent wrote payout_usdc=0, which turned
-        // actual wins into fake losses on the dashboard (prod had 0 wins / 18
-        // losses because every single close-absent row was a 100% loss on
-        // paper). Fix: query CLOB /markets/{cid} to discover the winning token
-        // and compute the correct payout. If CLOB can't resolve the winner
-        // (unresolved market, 404, network error), fall back to payout=0 and
-        // log at warn level so we can see how often this happens.
-        const payout = await this.computeAbsentPayout(dbPos);
-        await this.closeDbPosition(dbPos, 'absent_from_api', payout);
-        result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payout });
+        // 2026-04-10 (second iteration): we ask CLOB whether the market is
+        // actually resolved + which side won. Three cases:
+        //   (a) market resolved + this position's token won → payout = size
+        //   (b) market resolved + this position's token lost → payout = 0,
+        //       this is a real loss
+        //   (c) market still open / unresolved / fetch failed → undetermined.
+        //       The position is gone from the API for some reason we don't
+        //       understand (Data API filter quirk, neg-risk partial redeem,
+        //       pagination edge), but the market itself is not actually
+        //       resolved. We close the DB row as a PUSH (realized_pnl = 0,
+        //       payout = cost_basis) so it stays in the history table without
+        //       polluting W/L. This avoids the "0 wins / 53 losses" disaster
+        //       where fake -cost_basis rows inflated the loss count.
+        const payoutOutcome = await this.computeAbsentPayout(dbPos);
+        if (payoutOutcome === null) {
+          // Undetermined: write a push row (payout=cost_basis, pnl=0)
+          await this.closeDbPosition(
+            dbPos,
+            'absent_from_api',
+            dbPos.cost_basis,
+            0, // realized_pnl override — force push
+          );
+          result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: dbPos.cost_basis });
+        } else {
+          // Resolved: real payout (0 for a loss, size for a win)
+          await this.closeDbPosition(dbPos, 'absent_from_api', payoutOutcome);
+          result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payoutOutcome });
+        }
         apiByAsset.delete(dbPos.token_id);
         continue;
       }
@@ -244,12 +260,28 @@ export class OnChainReconciler {
   ): Promise<void> {
     const realizedPnl = realizedPnlOverride ?? (payoutUsd - dbPos.cost_basis);
 
+    // 2026-04-10: derive winning_outcome from the actual outcome, not from
+    // position_side. Previously this always wrote winning_outcome = position_side,
+    // which displayed nonsense like "position=NO, winning=NO, payout=0" for
+    // losses (looks like the position side won but got nothing). Now:
+    //   - push (realized_pnl = 0, explicit override) → empty string
+    //   - win (payout > 0)                           → winning = position_side
+    //   - loss (payout = 0 and !push)                → winning = opposite side
+    const posSide = this.outcomeFromString(dbPos.side);
+    const oppositeSide: Outcome = posSide === 'YES' ? ('NO' as Outcome) : ('YES' as Outcome);
+    const isPush = realizedPnlOverride === 0;
+    const derivedWinningOutcome: Outcome | '' = isPush
+      ? ''
+      : payoutUsd > 0
+        ? posSide
+        : oppositeSide;
+
     insertResolution({
       entity_slug: dbPos.entity_slug,
       condition_id: dbPos.condition_id,
       token_id: dbPos.token_id,
-      winning_outcome: this.outcomeFromString(dbPos.side),
-      position_side: this.outcomeFromString(dbPos.side),
+      winning_outcome: (derivedWinningOutcome || posSide) as Outcome,
+      position_side: posSide,
       size: dbPos.size,
       payout_usdc: payoutUsd,
       cost_basis_usdc: dbPos.cost_basis,
@@ -272,8 +304,8 @@ export class OnChainReconciler {
         entity_slug: dbPos.entity_slug,
         condition_id: dbPos.condition_id,
         token_id: dbPos.token_id,
-        winning_outcome: this.outcomeFromString(dbPos.side),
-        position_side: this.outcomeFromString(dbPos.side),
+        winning_outcome: (derivedWinningOutcome || posSide) as Outcome,
+        position_side: posSide,
         size: dbPos.size,
         payout_usdc: payoutUsd,
         cost_basis_usdc: dbPos.cost_basis,
@@ -309,27 +341,20 @@ export class OnChainReconciler {
   /**
    * Determine the payout for a position being closed as absent_from_api.
    *
-   * When a position disappears from the Data API's active list, we don't
-   * inherently know whether it redeemed as a winner (payout = size × $1.00)
-   * or a loser (payout = $0). Querying CLOB `/markets/{conditionId}` gives us
-   * the `tokens[].winner` flag which is the authoritative source.
+   * Return contract (2026-04-10 v2):
+   *   number  → market is resolved, payout is verified from CLOB. Either
+   *             `dbPos.size` (position won) or `0` (position lost).
+   *   null    → undetermined. Market is still open on CLOB, or CLOB doesn't
+   *             know a winner, or the fetch failed. Caller should write a
+   *             PUSH row instead of a fake -cost_basis loss.
    *
-   * Rules:
-   *   - If the market is closed AND CLOB flags a winner AND dbPos.token_id
-   *     matches the winner → payout = dbPos.size (1 USDC per share).
-   *   - If the market is closed AND a winner exists but dbPos.token_id is NOT
-   *     the winner → payout = 0 (the position lost).
-   *   - If the market is not yet closed, or CLOB doesn't know the winner, or
-   *     the fetch fails → payout = 0 with a warn log. This matches the old
-   *     behavior but is now the exception, not the rule.
-   *
-   * This is called from the sync reconciliation loop, so it blocks. In
-   * practice close_absent is rare per-cycle, but during a big resolution wave
-   * (e.g. a single weather day resolving 20+ positions) there could be many
-   * consecutive calls. The CLOB client has its own rate limiting; we accept
-   * the serialization cost because correctness matters more than cycle speed.
+   * The caller uses the null vs number distinction to decide whether to
+   * record the close as a real loss (realized_pnl = -cost_basis) or as an
+   * accounting-neutral push (realized_pnl = 0). Fake losses were the root
+   * cause of the "0 wins / 53 losses" bug — every undetermined close used
+   * to be recorded as a 100% loss, which made the dashboard useless.
    */
-  private async computeAbsentPayout(dbPos: PositionRow): Promise<number> {
+  private async computeAbsentPayout(dbPos: PositionRow): Promise<number | null> {
     try {
       const resp = await fetch(
         `https://clob.polymarket.com/markets/${encodeURIComponent(dbPos.condition_id)}`,
@@ -338,25 +363,25 @@ export class OnChainReconciler {
       if (!resp.ok) {
         log.warn(
           { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16), status: resp.status },
-          'CLOB winner lookup returned non-200 — falling back to payout=0 (may misclassify a win)',
+          'CLOB winner lookup returned non-200 — recording as push (undetermined)',
         );
-        return 0;
+        return null;
       }
       const data = (await resp.json()) as { closed?: boolean; tokens?: Array<{ token_id: string; winner?: boolean }> };
       if (!data.closed) {
         log.warn(
           { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16) },
-          'Position absent from API but CLOB says market still open — falling back to payout=0 (unexpected state)',
+          'Position absent from API but CLOB says market still open — recording as push (undetermined)',
         );
-        return 0;
+        return null;
       }
       const winnerToken = data.tokens?.find((t) => t.winner === true);
       if (!winnerToken) {
         log.warn(
           { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16) },
-          'Market closed but CLOB reports no winner token — falling back to payout=0',
+          'Market closed but CLOB reports no winner token — recording as push (undetermined)',
         );
-        return 0;
+        return null;
       }
       const didWin = winnerToken.token_id === dbPos.token_id;
       const payout = didWin ? dbPos.size : 0;
@@ -376,9 +401,9 @@ export class OnChainReconciler {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(
         { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16), err: msg },
-        'CLOB winner lookup threw — falling back to payout=0',
+        'CLOB winner lookup threw — recording as push (undetermined)',
       );
-      return 0;
+      return null;
     }
   }
 }
