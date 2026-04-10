@@ -1,0 +1,17 @@
+[Unit]
+Description=Polybot V3 long-tail market backfill (prod) — hourly schedule
+Requires=polybot-v3-backfill.service
+
+[Timer]
+# First run: 5 minutes after boot (let the main engine settle).
+OnBootSec=5min
+# Subsequent runs: every hour from the previous activation.
+OnUnitActiveSec=1h
+# Catch up on missed runs if the box was down.
+Persistent=true
+# Spread load — stagger up to 3 minutes so prod and R&D don't collide on Gamma.
+RandomizedDelaySec=3min
+Unit=polybot-v3-backfill.service
+
+[Install]
+WantedBy=timers.target

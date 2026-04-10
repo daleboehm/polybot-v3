@@ -157,6 +157,49 @@ program
     closeDatabase();
   });
 
+// ─── BACKFILL-MARKETS ───────────────────────────────────────
+// 2026-04-10: long-tail market metadata backfill. Walks open positions, finds
+// the ones whose markets row is missing end_date or sits outside the sampling
+// horizon, re-queries Gamma, and UPSERTs truth back into the DB. Intended to
+// run hourly via systemd timer — complements sampling-poller, doesn't replace it.
+program
+  .command('backfill-markets')
+  .description('Run long-tail market metadata backfill for open positions')
+  .option('--horizon-days <n>', 'Sampling horizon in days', '60')
+  .option('--dry-run', 'Log planned writes without touching the DB', false)
+  .option('--condition-id <id>', 'Restrict to a single condition_id (debugging)')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { runLongTailBackfill } = await import('../market/long-tail-backfill.js');
+    const result = await runLongTailBackfill({
+      horizonDays: Number(opts.horizonDays),
+      dryRun: Boolean(opts.dryRun),
+      onlyConditionId: opts.conditionId,
+    });
+
+    console.log('\n=== Long-Tail Backfill Result ===');
+    console.log(`Examined:            ${result.examined}`);
+    console.log(`Inside horizon:      ${result.skipped_inside_horizon}`);
+    console.log(`Already closed:      ${result.skipped_already_closed}`);
+    console.log(`Needed backfill:     ${result.needed_backfill}`);
+    console.log(`Updated:             ${result.updated}`);
+    console.log(`Inserted new:        ${result.inserted_new}`);
+    console.log(`Marked closed:       ${result.marked_closed}`);
+    console.log(`Errors:              ${result.errors.length}`);
+    if (result.errors.length > 0) {
+      for (const e of result.errors) {
+        console.log(`  ${e.conditionId}: ${e.error}`);
+      }
+    }
+    console.log('');
+
+    closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')

@@ -1,0 +1,15 @@
+[Unit]
+Description=Polybot V3 long-tail market backfill (R&D) — hourly schedule
+Requires=polybot-v3-rd-backfill.service
+
+[Timer]
+# Start R&D 30 minutes after prod so the two never collide on Gamma in the
+# same minute. Prod runs at boot+5min, R&D at boot+35min, then both hourly.
+OnBootSec=35min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=3min
+Unit=polybot-v3-rd-backfill.service
+
+[Install]
+WantedBy=timers.target
