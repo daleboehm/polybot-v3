@@ -61,6 +61,12 @@ auto_redeem.py
 old/
 legacy/
 
+# scripts/archive/ contains ~50 quarantined Python patch scripts from the
+# pre-rebuild hot-patch era (2026-04-07). Per rebuild-plan R3c these will be
+# deleted entirely, not committed. Gitignored here to keep `git status` clean
+# in the meantime. Do NOT run anything in this directory — it predates v3.
+scripts/archive/
+
 # ─── Coverage + test artifacts ─────────────────────────────────
 coverage/
 .nyc_output/
