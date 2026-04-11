@@ -131,14 +131,18 @@ export class RiskEngine {
     // matching on question text) and caps the total cost per cluster at
     // max_cluster_pct of trading_balance. Catches "10 positions on Hungary
     // elections = 1 bet" concentrations. Exits bypass.
+    //
+    // Signal doesn't carry market_question directly; look it up from the
+    // market cache by condition_id. If cache miss, fall back to empty
+    // string which means the scan falls back to `cid:<condition_id>` for
+    // its own cluster — no breach possible on first-sight.
     const clusterPct = this.limits.max_cluster_pct ?? 0.15;
     if (!isExit && clusterPct > 0) {
       const openPositions = getOpenPositions(entity.config.slug);
-      // Pass undefined for negRiskMap; market cache has neg_risk_market_id
-      // but plumbing it through per-call is phase 2b. Keyword matching alone
-      // catches the most important cases (political clusters).
+      const marketMeta = this.marketCache?.get(signal.condition_id);
+      const marketQuestion = marketMeta?.question ?? '';
       const clusterCheck = checkClusterCap(
-        signal.market_question ?? '',
+        marketQuestion,
         signal.condition_id,
         signal.recommended_size_usd ?? 0,
         entity.trading_balance,
