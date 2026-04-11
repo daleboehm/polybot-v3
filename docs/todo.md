@@ -1,6 +1,45 @@
 # Polymarket V3 — TODO
 
-Updated: 2026-04-11 (attention router + scout fleet shipped)
+Updated: 2026-04-11 (post-reconciler-fix + redemptions + Option B protection)
+
+## 48-HOUR REVIEW TRIGGER — 2026-04-13 or later
+
+**longshot.bucketed_fade protection review.** Added to
+`config/default.yaml` `advisor.protected_strategies` on 2026-04-11 as
+Option B from the advisor-investigation pass. Decision was:
+
+- R&D data said n=59, 76.3% WR, -$15.49 pnl — classic high-WR
+  Sharpe-negative pattern that Wilson doesn't catch but DSR/PSR would
+- Prod had zero clean data at the time (all resolutions were
+  reconciler-zero-P&L artifacts, fix just landed)
+- bucketed_fade was landing 7 of prod's last 30-min fills — it was
+  the primary order-flow producer, couldn't afford to kill it
+- Added as protected to prevent any future advisor logic change from
+  auto-disabling it before we have real prod data
+
+**When to review (any of):**
+1. Prod's `v_strategy_performance` shows n>=30 resolutions for
+   `longshot.bucketed_fade` with real P&L (not reconciler zeros)
+2. 48 hours elapsed since 2026-04-11 ~23:45 UTC (so 2026-04-13 23:45 UTC)
+3. Prod equity has dropped by more than $10 and we need to reassess
+   whether bucketed_fade is contributing to the bleed
+
+**How to review:**
+```sql
+SELECT strategy_id, sub_strategy_id, total_resolutions, wins, losses,
+       ROUND(win_rate, 1), ROUND(total_pnl, 2)
+FROM v_strategy_performance
+WHERE strategy_id = 'longshot' AND sub_strategy_id = 'bucketed_fade';
+```
+
+**Decision matrix:**
+- n<30: not enough prod data, extend protection another 48h
+- n>=30, WR>=60%, pnl>=0: remove from protected_strategies, let advisor manage
+- n>=30, WR>=60%, pnl<0: KEEP protected (Sharpe-negative pattern confirmed
+  on prod, but advisor can't see it). Plan a Phase B follow-up to wire
+  DSR/PSR into a voting role.
+- n>=30, WR<50%: remove protection AND explicitly exclude via
+  `sub_strategy_ids` in entities.yaml (same pattern as stratified_bias)
 
 ## NEXT SESSION — START HERE
 

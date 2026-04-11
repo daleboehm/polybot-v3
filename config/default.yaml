@@ -96,9 +96,21 @@ advisor:
   target_entity_slug: polybot
   # Never auto-disable these even if Wilson gate fires — they have real data
   # feeds (Open-Meteo, Binance) and low resolution counts from the R&D sample.
+  #
+  # 2026-04-11 Option B addition: longshot.bucketed_fade is protected because
+  # R&D shows n=59, 76.3% WR, -$15.49 pnl. Wilson UB=0.853 (Wilson wouldn't
+  # disable it anyway), but the -$15 pnl is a clear "high WR, Sharpe-negative"
+  # pattern that DSR/PSR would catch and Wilson misses. The protection is
+  # preventive in case advisor logic tightens later. Bucketed_fade landed 7
+  # of prod's last 30-min fills — protecting it keeps order flow stable.
+  # 48-HOUR REVIEW: after prod's own v_strategy_performance has n>=30 on
+  # bucketed_fade with real reconciler data, decide whether to keep the
+  # protection or let the advisor manage it. See docs/todo.md for the
+  # review trigger.
   protected_strategies:
     - weather_forecast
     - crypto_price
+    - longshot.bucketed_fade
   thresholds:
     min_resolutions_to_enable: 10
     min_win_rate_to_enable: 50
