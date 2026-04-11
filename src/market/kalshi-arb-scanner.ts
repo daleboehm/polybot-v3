@@ -81,7 +81,13 @@ export async function runKalshiArbScanner(
   opts: ScannerOptions = {},
 ): Promise<ScannerResult> {
   const minDivergence = opts.minDivergencePct ?? 0.03;
-  const minVolume = opts.minVolumeUsd ?? 2000;
+  // 2026-04-11 fix: CLOB /sampling-markets doesn't return volume, so
+  // Polymarket-side volume filter was blocking all matches. Default dropped
+  // to 0 for Poly-side; Kalshi-side still enforces min volume for liquid
+  // trades. Long-term fix is to backfill volume_24h via Gamma in the
+  // long-tail backfill job, but for now we trust the Kalshi-side check.
+  const minVolume = opts.minVolumeUsd ?? 0;
+  const kalshiMinVolume = 2000;
   const dryRun = opts.dryRun ?? false;
 
   const result: ScannerResult = {
@@ -113,9 +119,12 @@ export async function runKalshiArbScanner(
     return result;
   }
 
-  // Step 2: walk active Polymarket markets with enough liquidity
+  // Step 2: walk active Polymarket markets.
+  // Note: CLOB /sampling-markets doesn't populate volume_24h, so filtering on
+  // Poly-side volume would block everything. We filter on Kalshi-side volume
+  // only (checked below) which is still sufficient to ensure liquid both-sides.
   const polyMarkets = getActiveMarkets().filter(
-    (m) => (m.volume_24h ?? 0) >= minVolume,
+    (m) => minVolume === 0 || (m.volume_24h ?? 0) >= minVolume,
   );
   result.poly_markets_considered = polyMarkets.length;
 
@@ -129,8 +138,9 @@ export async function runKalshiArbScanner(
       const kalshiRow = kalshiMarkets.find((k) => k.ticker === match.kalshiTicker);
       if (!kalshiRow) continue;
 
+      // Kalshi-side liquidity filter is the real gate now (see comment above).
       const kalshiVolume = kalshiRow.volume ?? 0;
-      if (kalshiVolume < minVolume) continue;
+      if (kalshiVolume < kalshiMinVolume) continue;
 
       const polyYesPrice = pm.last_yes_price ?? 0;
       const kalshiYesPrice = kalshiRow.yesPrice ?? 0;
