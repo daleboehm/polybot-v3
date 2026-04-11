@@ -23,10 +23,26 @@ entities:
     mode: live
     status: active
     starting_capital: 500.00
+    # 2026-04-11 post-reconciler-fix strategy allow-list. Per real prod
+    # data (v_strategy_performance after the Phase -1 reconciler fix):
+    #   favorites.compounding       n=75  WR=64.3% pnl=+$3.02  KEEP
+    #   favorites.near_snipe        n=0   (no data yet)        KEEP (thesis intact)
+    #   favorites.fan_fade          n=4   (too small to tell)  KEEP (exploration)
+    #   favorites.stratified_bias   n=23  WR=25%   pnl=-$5.80  REMOVE — clear loser
+    #   weather_forecast            n=27  WR=66.7% pnl=+$2.25  KEEP
+    #   longshot.*                  too few resolutions yet    KEEP
+    #   convergence.*               pushes, no real data yet   KEEP
+    # Switch favorites from whole-strategy to sub_strategy_ids allow-list
+    # so we can explicitly exclude stratified_bias without touching the
+    # strategy code.
     strategies:
       - weather_forecast
       - crypto_price
-      - favorites
+      - strategy_id: favorites
+        sub_strategy_ids:
+          - compounding
+          - near_snipe
+          - fan_fade
       - longshot
       - convergence
       - sportsbook_fade
