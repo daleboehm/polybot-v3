@@ -5,7 +5,8 @@ import type { MarketCache } from '../market/market-cache.js';
 import { calculatePositionSize } from './position-sizer.js';
 import { StrategyWeighter } from './strategy-weighter.js';
 import { getOpenOrders } from '../storage/repositories/order-repo.js';
-import { getDeployedByStrategy } from '../storage/repositories/position-repo.js';
+import { getDeployedByStrategy, getOpenPositions } from '../storage/repositories/position-repo.js';
+import { checkClusterCap } from './portfolio-correlation.js';
 import { insertSignal } from '../storage/repositories/signal-repo.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
@@ -122,6 +123,36 @@ export class RiskEngine {
             limit_value: envelopeCapUsd,
           });
         }
+      }
+    }
+
+    // 2026-04-11 Phase 2.2: correlated-cluster cap.
+    // Groups open positions into clusters (neg_risk_market_id + keyword
+    // matching on question text) and caps the total cost per cluster at
+    // max_cluster_pct of trading_balance. Catches "10 positions on Hungary
+    // elections = 1 bet" concentrations. Exits bypass.
+    const clusterPct = this.limits.max_cluster_pct ?? 0.15;
+    if (!isExit && clusterPct > 0) {
+      const openPositions = getOpenPositions(entity.config.slug);
+      // Pass undefined for negRiskMap; market cache has neg_risk_market_id
+      // but plumbing it through per-call is phase 2b. Keyword matching alone
+      // catches the most important cases (political clusters).
+      const clusterCheck = checkClusterCap(
+        signal.market_question ?? '',
+        signal.condition_id,
+        signal.recommended_size_usd ?? 0,
+        entity.trading_balance,
+        clusterPct,
+        openPositions,
+      );
+      if (clusterCheck.breach) {
+        violations.push({
+          rule: 'cluster_cap',
+          message: `cluster ${clusterCheck.cluster_id} deployed $${clusterCheck.current_deployed.toFixed(2)} + proposed $${(signal.recommended_size_usd ?? 0).toFixed(2)} > cap $${clusterCheck.cap_usd.toFixed(2)} (${(clusterPct * 100).toFixed(0)}% of trading_balance)`,
+          severity: 'block',
+          current_value: clusterCheck.proposed_total,
+          limit_value: clusterCheck.cap_usd,
+        });
       }
     }
 

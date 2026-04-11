@@ -250,6 +250,48 @@ program
     process.exit(result.errors.length > 0 ? 1 : 0);
   });
 
+// ─── KALSHI-ARB-SCAN ────────────────────────────────────────
+// Phase 2.4 (2026-04-11): read-only arb scanner. Walks active Poly markets,
+// fetches Kalshi equivalents, logs opportunities to kalshi_arb_opportunities.
+// NEVER executes trades — Dale's directive is manual review first.
+program
+  .command('kalshi-arb-scan')
+  .description('Scan for Polymarket-Kalshi price divergence opportunities (read-only)')
+  .option('--dry-run', 'Log opportunities without writing to DB', false)
+  .option('--min-divergence <pct>', 'Minimum divergence %', '0.03')
+  .option('--min-volume <usd>', 'Minimum 24h volume both sides', '2000')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { runKalshiArbScanner } = await import('../market/kalshi-arb-scanner.js');
+    const result = await runKalshiArbScanner({
+      dryRun: Boolean(opts.dryRun),
+      minDivergencePct: Number(opts.minDivergence),
+      minVolumeUsd: Number(opts.minVolume),
+    });
+
+    console.log('\n=== Kalshi Arb Scanner Result ===');
+    console.log(`Poly markets considered:  ${result.poly_markets_considered}`);
+    console.log(`Kalshi markets fetched:   ${result.kalshi_markets_fetched}`);
+    console.log(`Matches found:            ${result.matches_found}`);
+    console.log(`Arb opportunities:        ${result.arb_opportunities}`);
+    console.log(`Errors:                   ${result.errors.length}`);
+    if (result.opportunities.length > 0) {
+      console.log('\nOpportunities:');
+      for (const o of result.opportunities) {
+        console.log(`  ${o.divergence_pct.toFixed(3)} | ${o.direction}`);
+        console.log(`    Poly:   $${o.poly_yes_price.toFixed(3)} | ${o.poly_question.substring(0, 70)}`);
+        console.log(`    Kalshi: $${o.kalshi_yes_price.toFixed(3)} | ${o.kalshi_title.substring(0, 70)}`);
+      }
+    }
+    console.log('');
+
+    closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')

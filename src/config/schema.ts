@@ -38,6 +38,17 @@ const riskLimitsSchema = z.object({
   // strategy cannot drain the bankroll; it gets its envelope and stops.
   // Set to 0 to disable the check entirely.
   max_strategy_envelope_pct: z.number().min(0).max(1).default(0.25),
+  // Phase 2.2: cap on any single correlated cluster (same neg_risk_market_id,
+  // keyword cluster like "us-election-2026", or weather-day grouping).
+  // Default 0.15 = 15% of trading_balance. Set to 0 to disable.
+  max_cluster_pct: z.number().min(0).max(1).default(0.15),
+  // Phase 2.5: trailing profit lock. Tracks peak unrealized PnL % per
+  // position. When current PnL drops below peak * trailing_retention_pct,
+  // trigger a profit-target exit at the retained level. Never fires below
+  // 0% PnL, so the NO-LOSE mantra is preserved — this is upside protection,
+  // not a stop-loss. Set trailing_retention_pct to 0 to disable.
+  trailing_retention_pct: z.number().min(0).max(1).default(0.70),
+  trailing_activation_pct: z.number().min(0).max(1).default(0.20),
 });
 
 const engineConfigSchema = z.object({

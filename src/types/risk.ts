@@ -18,6 +18,9 @@ export interface RiskLimits {
   max_hours_to_resolve?: number;    // 48 — global short-horizon filter ceiling
   tiered_stops: TieredStop[];
   max_strategy_envelope_pct?: number; // 0.25 — per-strategy capital cap (Phase 1.5, 2026-04-11)
+  max_cluster_pct?: number;           // 0.15 — correlated-cluster cap (Phase 2.2, 2026-04-11)
+  trailing_retention_pct?: number;    // 0.70 — trailing profit lock retention (Phase 2.5, 2026-04-11)
+  trailing_activation_pct?: number;   // 0.20 — min PnL % before trailing arms
 }
 
 export interface TieredStop {

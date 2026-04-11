@@ -460,6 +460,21 @@ export function applySchema(db: Database.Database): void {
     log.warn({ err }, 'uma_resolution_status migration failed');
   }
 
+  // 2026-04-11 Phase 2.5: add peak_pnl_pct column to positions for the
+  // trailing profit lock. Tracks the highest unrealized PnL % the position
+  // has ever reached, so we can trigger a profit-target exit when current
+  // PnL drops below peak * trailing_retention_pct. Preserves the NO-LOSE
+  // mantra (never exits at a loss) while capturing more on runners.
+  try {
+    const posCols = db.prepare(`PRAGMA table_info(positions)`).all() as Array<{ name: string }>;
+    if (!posCols.some(c => c.name === 'peak_pnl_pct')) {
+      db.exec(`ALTER TABLE positions ADD COLUMN peak_pnl_pct REAL DEFAULT 0`);
+      log.info('Added peak_pnl_pct column to positions');
+    }
+  } catch (err) {
+    log.warn({ err }, 'peak_pnl_pct migration failed');
+  }
+
   // Force-recreate views on every startup so edits to the DDL take effect.
   // CREATE VIEW IF NOT EXISTS is a no-op when the view already exists, so any
   // change to the SQL below would silently not apply without this drop step.

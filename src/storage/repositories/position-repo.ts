@@ -171,13 +171,21 @@ export function getPosition(entitySlug: string, conditionId: string, tokenId: st
 
 export function updatePositionPrice(entitySlug: string, conditionId: string, tokenId: string, price: number): void {
   const db = getDatabase();
+  // 2026-04-11 Phase 2.5: also maintain peak_pnl_pct for the trailing profit
+  // lock. Only increases; once the peak is set, it ratchets up only.
   db.prepare(`
     UPDATE positions SET
       current_price = ?,
       unrealized_pnl = (? - avg_entry_price) * size,
+      peak_pnl_pct = MAX(
+        COALESCE(peak_pnl_pct, 0),
+        CASE WHEN avg_entry_price > 0
+             THEN (? - avg_entry_price) / avg_entry_price
+             ELSE 0 END
+      ),
       updated_at = datetime('now')
     WHERE entity_slug = ? AND condition_id = ? AND token_id = ? AND status = 'open'
-  `).run(price, price, entitySlug, conditionId, tokenId);
+  `).run(price, price, price, entitySlug, conditionId, tokenId);
 }
 
 export function getOpenPositionCount(entitySlug: string): number {
@@ -224,4 +232,5 @@ export interface PositionRow {
   closed_at: string | null;
   updated_at: string;
   market_end_date: string | null;
+  peak_pnl_pct?: number; // Phase 2.5: trailing profit lock peak
 }

@@ -114,6 +114,12 @@ export class StrategyAdvisor {
       };
     }
 
+    // 2026-04-11 Phase 2.3: recent (last 14 days) Wilson LB for regime
+    // decay detection. Read once, alongside the all-time data; used in
+    // the disable branch below to catch strategies that are failing NOW
+    // even though their all-time stats still look OK.
+    const recentLBs = this.readRecentRdPerformance(14, 10);
+
     // Get all registered (strategy_id, sub_strategy_id) pairs from the registry
     const allPairs = this.strategyRegistry.getAllSubStrategyKeys();
     const decisions: AdvisorDecision[] = [];
@@ -181,6 +187,14 @@ export class StrategyAdvisor {
         // win rate is below 0.50 (Wilson UB < 0.50) AND P&L < -$5 to prevent
         // killing a merely-unlucky strategy.
         const wilsonUB = wilsonUpperBound(rd.wins, rd.total_resolutions);
+
+        // 2026-04-11 Phase 2.3: regime decay check. If the last-14-days
+        // Wilson LB is < 0.40 AND we have n ≥ 10 in the recent window,
+        // disable the strategy even if all-time Wilson UB hasn't tripped.
+        // This catches recent failures that the all-time average masks.
+        const recentLB = recentLBs.get(pairKey);
+        const recentRegimeDecay = recentLB !== undefined && recentLB !== null && recentLB < 0.40;
+
         if (
           rd.total_resolutions >= MIN_N_DISABLE &&
           wilsonUB < MAX_WILSON_UB_DISABLE &&
@@ -189,8 +203,15 @@ export class StrategyAdvisor {
           action = 'disable';
           reason = `R&D underperforming: Wilson UB ${wilsonUB.toFixed(3)} < ${MAX_WILSON_UB_DISABLE}, $${rd.total_pnl.toFixed(2)} P&L over ${rd.total_resolutions} resolutions`;
           enabledKeys.delete(pairKey);
+        } else if (recentRegimeDecay) {
+          action = 'disable';
+          reason = `Regime decay: last-14d Wilson LB ${recentLB!.toFixed(3)} < 0.40 (all-time still OK, recent trend negative)`;
+          enabledKeys.delete(pairKey);
         } else {
           reason = `Active — R&D: ${rd.total_resolutions > 0 ? rd.win_rate.toFixed(1) + '% raw WR, $' + rd.total_pnl.toFixed(2) + ' P&L' : 'collecting data'}`;
+          if (recentLB !== undefined && recentLB !== null) {
+            reason += ` (recent 14d LB: ${recentLB.toFixed(3)})`;
+          }
         }
       }
 
@@ -293,6 +314,58 @@ export class StrategyAdvisor {
       }
       log.debug({ rows: map.size, path: this.config.rd_database_path }, 'R&D performance data loaded');
       return map;
+    } finally {
+      db.close();
+    }
+  }
+
+  /**
+   * 2026-04-11 Phase 2.3: recency-weighted performance.
+   *
+   * Reads the last N days of resolutions per (strategy_id, sub_strategy_id)
+   * and returns a recent Wilson LB. Used to detect regime decay — when a
+   * strategy's all-time Wilson LB is still good but its last-14-days LB
+   * has collapsed, we demote it even though the advisor's all-time gate
+   * wouldn't catch it.
+   *
+   * Returns a Map keyed by the same composite key as readRdPerformance(),
+   * with value = recent Wilson lower bound (0-1) or null if insufficient n.
+   */
+  private readRecentRdPerformance(daysBack = 14, minN = 10): Map<string, number | null> {
+    const db = new Database(this.config.rd_database_path, { readonly: true, fileMustExist: true });
+    try {
+      const rows = db.prepare(`
+        SELECT
+          strategy_id,
+          COALESCE(sub_strategy_id, '') AS sub_strategy_id,
+          COUNT(*) AS n,
+          SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
+        FROM resolutions
+        WHERE resolved_at >= datetime('now', ?)
+          AND strategy_id IS NOT NULL
+        GROUP BY strategy_id, COALESCE(sub_strategy_id, '')
+      `).all(`-${daysBack} days`) as Array<{
+        strategy_id: string;
+        sub_strategy_id: string;
+        n: number;
+        wins: number;
+      }>;
+
+      const map = new Map<string, number | null>();
+      for (const row of rows) {
+        const key = this.key(row.strategy_id, row.sub_strategy_id);
+        if (row.n < minN) {
+          map.set(key, null);
+          continue;
+        }
+        const lb = wilsonLowerBound(row.wins, row.n);
+        map.set(key, lb);
+      }
+      log.debug({ rows: map.size, days: daysBack }, 'Recent R&D performance loaded');
+      return map;
+    } catch (err) {
+      log.warn({ err }, 'Failed to read recent R&D performance — skipping regime check');
+      return new Map();
     } finally {
       db.close();
     }
