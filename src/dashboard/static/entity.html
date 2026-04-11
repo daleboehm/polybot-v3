@@ -237,20 +237,20 @@ async function load() {
       var d = JSON.parse(ev.data);
       if (d.fill && d.fill.entity_slug === SLUG) {
         evCount++;
-        var ts = new Date().toLocaleTimeString();
+        var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
         elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#10b981">FILL: '+d.fill.side+' '+d.fill.outcome+' @ $'+d.fill.price.toFixed(3)+' ('+F(d.fill.usdc_size)+')</span></div>' + elog.innerHTML;
       }
     });
     es.addEventListener('engine:cycle_complete', function(ev) {
       var d = JSON.parse(ev.data);
       evCount++;
-      var ts = new Date().toLocaleTimeString();
+      var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
       elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#06b6d4">Cycle '+d.cycle+': '+d.signals+' signals, '+d.orders+' orders ('+d.duration_ms+'ms)</span></div>' + elog.innerHTML;
     });
     es.addEventListener('risk:lockout', function(ev) {
       var d = JSON.parse(ev.data);
       if (d.entity_slug === SLUG) {
-        var ts = new Date().toLocaleTimeString();
+        var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
         elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#ef4444">LOCKOUT: '+d.reason+'</span></div>' + elog.innerHTML;
       }
     });

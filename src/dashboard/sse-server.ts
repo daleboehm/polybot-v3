@@ -627,7 +627,7 @@ function connectSSE() {
   function addEvent(text, color) {
     eventCounter++;
     document.getElementById('eventCount').textContent = '('+eventCounter+')';
-    const ts = new Date().toLocaleTimeString();
+    const ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
     log.innerHTML = '<div style="padding:4px 0;border-bottom:1px solid #1a1f2e"><span style="color:#4a5568">'+ts+'</span> <span style="color:'+color+'">'+text+'</span></div>' + log.innerHTML;
     while (log.children.length > 200) log.lastChild.remove();
   }

@@ -414,7 +414,7 @@ function connectSSE() {
   function addEvent(text, color) {
     eventCounter++;
     $('eventCount').textContent = `(${eventCounter})`;
-    const ts = new Date().toLocaleTimeString();
+    const ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
     const cls = color ? ` style="color:var(--c)"`.replace('var(--c)', color === 'green' ? '#10b981' : color === 'red' ? '#ef4444' : color === 'orange' ? '#f6ad55' : color === 'blue' ? '#3b82f6' : color === 'cyan' ? '#06b6d4' : '#718096') : '';
     log.innerHTML = `<div class="event"><span class="ts">${ts}</span> <span${cls}>${text}</span></div>` + log.innerHTML;
     while (log.children.length > 200) log.lastChild.remove();
