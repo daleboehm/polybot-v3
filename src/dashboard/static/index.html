@@ -98,7 +98,7 @@ tr:last-child td { border-bottom: none; }
   <h2>Entities <span class="count" id="entityCount"></span></h2>
   <table>
     <thead>
-      <tr><th>Entity</th><th>Mode</th><th>Status</th><th>Balance</th><th>P&L</th><th>Win Rate</th><th>W/L</th><th>Trades</th><th>Open Pos</th><th>Volume</th></tr>
+      <tr><th>Entity</th><th>Mode</th><th>Status</th><th>Cash</th><th>Capital Deployed</th><th>Equity</th><th>Upside</th><th>P&L vs Start</th><th>Win Rate</th><th>W/L</th><th>Trades</th><th>Open Pos</th><th>Volume</th></tr>
     </thead>
     <tbody id="entitiesBody"></tbody>
   </table>
@@ -229,18 +229,30 @@ async function loadDashboard() {
   `;
 
   // Entities table
+  // 2026-04-11: per-row P&L was showing e.total_realized_pnl (resolutions-table
+  // sum), which excludes pushes + unrealized mark-to-market. The scoreboard
+  // header computes (cash + deployed) - starting correctly; the row now does
+  // the same math per-entity so the Caspian P&L column matches reality.
+  // Balance renamed to Cash; added Capital Deployed / Equity / Upside columns.
   $('entityCount').textContent = `(${entities.length})`;
   $('entitiesBody').innerHTML = entities.map(e => {
     const wr = (e.total_wins + e.total_losses) > 0 ? ((e.total_wins / (e.total_wins + e.total_losses)) * 100).toFixed(1) + '%' : '-';
     const modeBadge = e.mode === 'live' ? '<span class="badge-sm badge-live-sm">LIVE</span>' : '<span class="badge-sm badge-paper-sm">PAPER</span>';
     const statusBadge = e.status === 'active' ? '<span class="badge-sm badge-go">active</span>' : e.status === 'pending' ? '<span class="badge-sm badge-wait">pending</span>' : '<span class="badge-sm badge-no">' + e.status + '</span>';
-    const bal = (e.current_cash || 0) + (e.reserve_balance || 0);
+    const cash = e.current_cash || 0;
+    const deployed = e.open_positions_value || 0;
+    const equity = cash + deployed;
+    const upside = e.total_upside || 0;
+    const pnlVsStart = equity - (e.starting_capital || 0);
     return `<tr>
       <td><a href="/entity/${e.slug}" style="color:#e2e8f0;text-decoration:none"><strong>${e.name}</strong></a><br><small style="color:#4a5568">${e.slug}</small></td>
       <td>${modeBadge}</td>
       <td>${statusBadge}</td>
-      <td>${fmt(bal)}</td>
-      <td class="${pnlCls(e.total_realized_pnl)}">${fmt(e.total_realized_pnl)}</td>
+      <td>${fmt(cash)}</td>
+      <td class="orange">${fmt(deployed)}</td>
+      <td class="${pnlCls(pnlVsStart)}">${fmt(equity)}</td>
+      <td class="green">${fmt(upside)}</td>
+      <td class="${pnlCls(pnlVsStart)}">${fmt(pnlVsStart)}</td>
       <td>${wr}</td>
       <td><span class="green">${e.total_wins}</span>/<span class="red">${e.total_losses}</span></td>
       <td>${e.total_trades.toLocaleString()}</td>
