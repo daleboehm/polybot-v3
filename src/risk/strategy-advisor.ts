@@ -13,6 +13,7 @@ import type { EntityManager } from '../entity/entity-manager.js';
 import type { StrategyRegistry } from '../strategy/strategy-registry.js';
 import { eventBus } from '../core/event-bus.js';
 import { wilsonLowerBound, wilsonUpperBound } from './wilson.js';
+import { computeAdvisorV2Decision, type AdvisorV2Decision } from './advisor-v2-metrics.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('strategy-advisor');
@@ -27,6 +28,33 @@ const MIN_PNL_ENABLE = 5.0;
 const MIN_N_DISABLE = 50;
 const MAX_WILSON_UB_DISABLE = 0.50;
 const MAX_PNL_DISABLE = -5.0;
+
+// Phase B (2026-04-11): advisor v2 dual-decision shadow mode.
+//
+// When process.env.ADVISOR_V2_ENABLED === 'true', the advisor ALSO runs
+// the DSR + PSR + MinTRL + Brier metrics pipeline (computeAdvisorV2Decision)
+// on each pair and logs the result SIDE-BY-SIDE with the Wilson LB
+// decision. Behavior is UNCHANGED — v2 output is shadow-logged only.
+// This is the 7-day A/B window: we need to see how often DSR/PSR would
+// disagree with Wilson LB before we let either one drive an auto
+// enable/disable.
+//
+// Flag defaults OFF so the extra DB read (returns-series per pair) only
+// happens when you explicitly opt in. To enable in R&D only:
+//   systemctl edit polybot-v3-rd.service
+//     Environment=ADVISOR_V2_ENABLED=true
+//   systemctl restart polybot-v3-rd
+//
+// There is intentionally NO code path where v2 overrides Wilson. The
+// point of this phase is measurement, not action. After the 7-day
+// window, a follow-up PR will promote v2 to a voting role or replace
+// Wilson outright.
+const ADVISOR_V2_ENABLED = process.env.ADVISOR_V2_ENABLED === 'true';
+
+function roundMetric(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 10000) / 10000;
+}
 
 interface RdStrategyRow {
   strategy_id: string;
@@ -231,6 +259,66 @@ export class StrategyAdvisor {
             }
           : null,
       });
+
+      // Phase B (2026-04-11): advisor v2 dual-decision shadow mode.
+      //
+      // If ADVISOR_V2_ENABLED=true, compute the DSR/PSR/MinTRL/Brier
+      // decision on the same pair and log it alongside the Wilson LB
+      // decision above. This is PURELY observational — we are not
+      // acting on v2 decisions yet. The point is to accumulate a log
+      // of "Wilson said X, DSR/PSR said Y, they agreed/disagreed" so
+      // that after a 7-day window we have data to decide whether to
+      // promote v2 to a voting role.
+      //
+      // Errors in this path MUST NOT interfere with the main Wilson-LB
+      // decision flow. Try/catch swallows everything.
+      if (ADVISOR_V2_ENABLED) {
+        let v2Decision: AdvisorV2Decision | null = null;
+        try {
+          v2Decision = computeAdvisorV2Decision(
+            this.config.rd_database_path,
+            pair.strategy_id,
+            pair.sub_strategy_id ?? '',
+            enabledKeys.size,
+          );
+        } catch (err) {
+          log.debug(
+            {
+              err: err instanceof Error ? err.message : String(err),
+              strategy: pair.strategy_id,
+              sub: pair.sub_strategy_id,
+            },
+            'Advisor v2 shadow metric failed',
+          );
+        }
+
+        if (v2Decision) {
+          const agrees = v2Decision.action === action;
+          log.info(
+            {
+              strategy: pair.strategy_id,
+              sub: pair.sub_strategy_id,
+              wilson_action: action,
+              v2_action: v2Decision.action,
+              agrees,
+              v2_reason: v2Decision.reason,
+              v2_n: v2Decision.n,
+              v2_sharpe: roundMetric(v2Decision.sharpe),
+              v2_psr: roundMetric(v2Decision.psr),
+              v2_dsr: roundMetric(v2Decision.dsr.dsr),
+              v2_min_trl: Number.isFinite(v2Decision.min_track_record_length)
+                ? Math.ceil(v2Decision.min_track_record_length)
+                : null,
+              v2_skew: roundMetric(v2Decision.dsr.skew),
+              v2_kurtosis: roundMetric(v2Decision.dsr.kurtosis),
+              v2_brier: v2Decision.brier_score !== null ? roundMetric(v2Decision.brier_score) : null,
+              v2_brier_reliability: v2Decision.brier_reliability !== null ? roundMetric(v2Decision.brier_reliability) : null,
+              v2_brier_drift: v2Decision.brier_drift_warning,
+            },
+            agrees ? 'Advisor v2 shadow — AGREES with Wilson' : 'Advisor v2 shadow — DISAGREES with Wilson',
+          );
+        }
+      }
     }
 
     // Rebuild EntityStrategyConfig from enabledKeys
