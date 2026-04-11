@@ -21,7 +21,7 @@
 // reconciliation and refuses to place new trades for that entity. Per obra-defense-in-depth
 // — we do NOT fall back to Gamma polling, because that's the path that was broken.
 
-import type { DataApiClient, OpenPosition as ApiOpenPosition, ResolvedPosition as ApiResolvedPosition } from './data-api-client.js';
+import type { DataApiClient, OpenPosition as ApiOpenPosition, ResolvedPosition as ApiResolvedPosition, FullPosition } from './data-api-client.js';
 import type { NegRiskRedeemer } from '../execution/neg-risk-redeemer.js';
 import type { PositionRow } from '../storage/repositories/position-repo.js';
 import { closePosition, upsertPosition, getOpenPositions } from '../storage/repositories/position-repo.js';
@@ -38,7 +38,7 @@ const log = createChildLogger('reconciler');
 export interface ReconcileAction {
   kind: 'close_absent' | 'close_resolved' | 'insert_orphan' | 'keep_open';
   dbPosition?: PositionRow;
-  apiPosition?: ApiOpenPosition | ApiResolvedPosition;
+  apiPosition?: ApiOpenPosition | ApiResolvedPosition | FullPosition;
   payoutUsd?: number;
   realizedPnl?: number;
 }
@@ -101,22 +101,32 @@ export class OnChainReconciler {
     }
     this.lastReconcile.set(entitySlug, Date.now());
 
-    // CRITICAL NOTE (2026-04-10): the Polymarket Data API's `status=resolved` filter
-    // is BROKEN — it returns the SAME positions as `status=active`. The earlier
-    // reconciler version used both endpoints and treated the `resolved` bucket as
-    // "closed positions with currentValue as payout," which phantom-closed 5 still-
-    // active positions and credited their mark-to-market as phantom cash.
+    // Phase -1 fix (2026-04-11): the reconciler now uses the UNFILTERED
+    // `/positions` endpoint (getAllPositions) which returns BOTH active
+    // AND redeemable positions plus `cashPnl` and `redeemable` fields.
     //
-    // Fix: use ONLY `getOpenPositions(status=active)` as the authoritative list of
-    // what the wallet currently holds. Anything in the DB open set that isn't in
-    // the active API list is treated as "already redeemed off-chain" — we don't
-    // know how much cash was credited by that off-chain redemption, but the
-    // startup wallet-sync step reads the on-chain USDC balance as ground truth
-    // so the accounting stays consistent. Per-cycle reconciliation does NOT touch
-    // cash_balance — it only manages position state.
-    let apiActive: ApiOpenPosition[];
+    // Root cause of the prior bug: the `status=active` filter used by
+    // getOpenPositions() HIDES all redeemable (dead) positions. The
+    // reconciler saw a DB position that was missing from active-API and
+    // classified it as "closed off-chain, undetermined outcome → write
+    // a push row with realized_pnl=0." Across prod this wrote 348 of
+    // 360 resolutions as accounting-neutral zeros, which made the
+    // StrategyAdvisor completely blind to actual prod edge — every
+    // resolution was "0 wins, $0 P&L" regardless of whether the
+    // underlying market won or lost.
+    //
+    // The fix: query the unfiltered endpoint. If a DB position shows up
+    // in the full list with `currentValue === 0` (total loss) or
+    // `redeemable === true` (market settled, cash waiting to redeem),
+    // we use `cashPnl` directly as the authoritative realized P&L.
+    // No more fake zeros.
+    //
+    // The `status=resolved` endpoint is STILL broken (returns active
+    // rows), which is why we don't use it. The unfiltered endpoint with
+    // `sizeThreshold=0.01` is the one that works.
+    let apiAll: FullPosition[];
     try {
-      apiActive = await this.dataApi.getOpenPositions(proxyWallet);
+      apiAll = await this.dataApi.getAllPositions(proxyWallet);
       result.apiReachable = true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -125,9 +135,25 @@ export class OnChainReconciler {
       return result;
     }
 
-    // Index active API positions by asset (token_id) for O(1) lookup.
-    const apiByAsset = new Map<string, ApiOpenPosition>();
-    for (const p of apiActive) apiByAsset.set(p.asset, p);
+    // Partition: anything redeemable=true or currentValue=0 is DEAD, anything
+    // else is ACTIVE. Build two maps for fast lookup.
+    const apiActiveByAsset = new Map<string, FullPosition>();
+    const apiDeadByAsset = new Map<string, FullPosition>();
+    for (const p of apiAll) {
+      // Defensive: the API is supposed to return numeric fields numerically
+      // on this endpoint, but we coerce in case of shape drift.
+      const cv = Number(p.currentValue);
+      const isDead = p.redeemable === true || (Number.isFinite(cv) && cv === 0);
+      if (isDead) {
+        apiDeadByAsset.set(p.asset, p);
+      } else {
+        apiActiveByAsset.set(p.asset, p);
+      }
+    }
+    // Back-compat alias: older code below referred to `apiByAsset` as
+    // "what's currently held." We keep that naming and point it at the
+    // active subset (redeemable/dead are handled in the close-absent branch).
+    const apiByAsset = apiActiveByAsset;
 
     // Pull our DB view of this entity's open positions.
     const dbPositions = getOpenPositions(entitySlug);
@@ -137,25 +163,54 @@ export class OnChainReconciler {
       const api = apiByAsset.get(dbPos.token_id);
 
       if (!api) {
-        // Not in active API → the on-chain position no longer exists.
-        // It was either redeemed off-chain (manual Polymarket redemption or
-        // external flow) or never existed. The actual cash credit already
-        // happened on-chain and will be reflected in the wallet's USDC
-        // balance at the next wallet sync — we do NOT touch cash_balance here.
-        //
-        // 2026-04-10 (second iteration): we ask CLOB whether the market is
-        // actually resolved + which side won. Three cases:
-        //   (a) market resolved + this position's token won → payout = size
-        //   (b) market resolved + this position's token lost → payout = 0,
-        //       this is a real loss
-        //   (c) market still open / unresolved / fetch failed → undetermined.
-        //       The position is gone from the API for some reason we don't
-        //       understand (Data API filter quirk, neg-risk partial redeem,
-        //       pagination edge), but the market itself is not actually
-        //       resolved. We close the DB row as a PUSH (realized_pnl = 0,
-        //       payout = cost_basis) so it stays in the history table without
-        //       polluting W/L. This avoids the "0 wins / 53 losses" disaster
-        //       where fake -cost_basis rows inflated the loss count.
+        // Position is NOT in the active set on-chain. Two sub-cases:
+        //   (1) DEAD — it's in the redeemable/zero-value bucket. This is
+        //       the happy path after the Phase -1 fix: the Data API tells
+        //       us the actual cashPnl, we use it as the authoritative
+        //       realized_pnl, and the DB resolution row now reflects
+        //       reality instead of a zero-P&L placeholder.
+        //   (2) GENUINELY MISSING — position isn't in the dead bucket
+        //       either. Either redeemed off-chain by a separate flow,
+        //       or the API has a consistency lag. Fall back to the CLOB
+        //       winner lookup (legacy path), and if that's undetermined
+        //       write a push row.
+        const dead = apiDeadByAsset.get(dbPos.token_id);
+        if (dead) {
+          // Authoritative path: Data API already computed P&L. Use it.
+          const cashPnl = Number(dead.cashPnl);
+          const currentValue = Number(dead.currentValue);
+          // currentValue is the cash we'd receive if we redeemed right now.
+          // For a total-loss position this is 0. For a winning position
+          // that's still waiting to be redeemed this is size * 1.0 = size.
+          const payout = Number.isFinite(currentValue) ? currentValue : 0;
+          // Realized PnL override: use the API's cashPnl directly when
+          // finite, otherwise compute from payout - cost_basis (fallback).
+          const realizedPnl = Number.isFinite(cashPnl) ? cashPnl : payout - dbPos.cost_basis;
+          await this.closeDbPosition(
+            dbPos,
+            'absent_from_api',
+            payout,
+            realizedPnl,
+          );
+          log.info(
+            {
+              entity: entitySlug,
+              condition: dbPos.condition_id.substring(0, 16),
+              redeemable: dead.redeemable,
+              current_value: currentValue,
+              cash_pnl: cashPnl,
+              cost_basis: dbPos.cost_basis,
+              realized_pnl: realizedPnl,
+            },
+            'close_absent via Data API cashPnl (authoritative)',
+          );
+          result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payout });
+          continue;
+        }
+
+        // Fallback: position is genuinely missing from both active AND
+        // dead buckets. Ask CLOB about the winner. If CLOB doesn't know,
+        // write a push row so we don't fabricate a loss.
         const payoutOutcome = await this.computeAbsentPayout(dbPos);
         if (payoutOutcome === null) {
           // Undetermined: write a push row (payout=cost_basis, pnl=0)
@@ -167,11 +222,10 @@ export class OnChainReconciler {
           );
           result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: dbPos.cost_basis });
         } else {
-          // Resolved: real payout (0 for a loss, size for a win)
+          // Resolved via CLOB: real payout (0 for a loss, size for a win)
           await this.closeDbPosition(dbPos, 'absent_from_api', payoutOutcome);
           result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payoutOutcome });
         }
-        apiByAsset.delete(dbPos.token_id);
         continue;
       }
 
@@ -192,23 +246,29 @@ export class OnChainReconciler {
     // provides a reliable "redeemable" flag. Void to silence unused-param lint.
     void redeemer;
 
-    // Pass 2: any API positions left in the map are orphans (crash-window inserts,
-    // or positions opened by another process). Reconstruct a DB row so the advisor
-    // and stop-loss monitor can see them going forward.
+    // Pass 2: any ACTIVE API positions left in the map are orphans (crash-window
+    // inserts, or positions opened by another process). Reconstruct a DB row so
+    // the advisor and stop-loss monitor can see them going forward.
+    //
+    // NOTE: apiByAsset here is the ACTIVE subset of FullPosition. We intentionally
+    // do NOT insert orphans from the DEAD bucket — those are already-settled
+    // positions and we don't need to track them going forward. They appear as
+    // close_absent rows in the resolutions table via the matched-DB-position
+    // close-absent path above, which is the correct accounting.
     for (const pos of apiByAsset.values()) {
       try {
-        const size = this.safeParseFloat(pos.size);
-        const avgPrice = this.safeParseFloat(pos.avgPrice);
-        const costBasis = this.safeParseFloat(pos.initialValue);
+        const size = Number(pos.size);
+        const avgPrice = Number(pos.avgPrice);
+        const costBasis = Number(pos.initialValue);
         upsertPosition({
           entity_slug: entitySlug,
           condition_id: pos.conditionId,
           token_id: pos.asset,
           side: this.outcomeFromString(pos.outcome),
-          size,
-          avg_entry_price: avgPrice,
-          cost_basis: costBasis,
-          current_price: avgPrice,
+          size: Number.isFinite(size) ? size : 0,
+          avg_entry_price: Number.isFinite(avgPrice) ? avgPrice : 0,
+          cost_basis: Number.isFinite(costBasis) ? costBasis : 0,
+          current_price: Number.isFinite(avgPrice) ? avgPrice : 0,
           unrealized_pnl: 0,
           market_question: pos.title,
           market_slug: undefined,
@@ -217,9 +277,6 @@ export class OnChainReconciler {
           is_paper: false,
         });
         result.actions.push({ kind: 'insert_orphan', apiPosition: pos });
-        // Info level — orphan insertion is the expected path on first startup
-        // after a deploy (positions that were open on-chain but absent from DB
-        // because v2 never wrote them, or because we wiped DB state during a fix).
         log.info(
           { entity: entitySlug, conditionId: pos.conditionId.substring(0, 16), question: pos.title?.substring(0, 50) },
           'Orphan position inserted from on-chain state',
