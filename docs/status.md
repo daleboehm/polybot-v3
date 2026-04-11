@@ -2,6 +2,116 @@
 
 Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
 
+## 2026-04-11 session — Phase B SHIPPED in shadow mode + Phase D LlmNewsScout activated (commits `f967642` → `fc18dfd`)
+
+### Phase B — DSR/PSR/Brier advisor v2 shadow mode LIVE on prod
+
+**Commits `6035c93` + `fc18dfd`.** Shadow-mode wiring is complete,
+deployed, and firing on every prod advisor cycle. Wilson LB gating
+behavior is UNCHANGED — v2 is observational only until the 7-day A/B
+window closes.
+
+**New files:**
+- `src/validation/returns-series.ts` — loads resolved positions from
+  the R&D DB and converts to per-trade returns (`realized_pnl / cost_basis`)
+  plus binary outcome and entry_price. Drops rows with null cost_basis.
+- `src/risk/advisor-v2-metrics.ts` — `computeAdvisorV2Decision()` wraps
+  PSR/DSR/MinTRL/Brier into a structured decision per (strategy, sub).
+  Thresholds: PSR_ENABLE=0.95, DSR_ENABLE=0.95, PSR_DISABLE=0.05,
+  MIN_RETURNS_FOR_METRICS=30, BRIER_RELIABILITY_WARN=0.05.
+  Uses existing `computeBrier()` from brier.ts (Phase B augment added
+  `reliabilityScalar` + `uncertainty` fields in prior commit).
+
+**Modified:**
+- `src/risk/strategy-advisor.ts` — imports v2 metrics, reads
+  `ADVISOR_V2_ENABLED` env flag at module load, computes v2 decision
+  AFTER Wilson on every pair, logs three-way classification
+  (`agrees` / `disagrees` / `insufficient_data`) with all metrics
+  side-by-side. Errors in v2 path are swallowed to debug-level so they
+  can never break Wilson.
+- `src/validation/walk-forward.ts` — deprecation comment on the old
+  `deflatedSharpeRatio` function pointing at `dsr-psr.ts` as canonical.
+
+**Feature flag setup:**
+- Drop-in file: `/etc/systemd/system/polybot-v3.service.d/advisor-v2.conf`
+  ```
+  [Service]
+  Environment=ADVISOR_V2_ENABLED=true
+  ```
+- Prod: flag ON (shadow mode logs firing, zero behavior change)
+- R&D: flag OFF (R&D doesn't run its own advisor — advisor is prod-side only)
+
+### First production cycle findings (2026-04-11 22:32 UTC)
+
+**Shadow classification breakdown** (sample from first post-deploy cycle):
+- ~65% `insufficient_data` — sub-strategies with <30 resolutions in R&D.
+  This is the majority of pairs (weather subs, crypto subs, sportsbook_fade,
+  cross_market, macro_forecast all have 0-15 trades so far).
+- ~20% `agrees` — longshot systems and favorites.compounding have enough
+  data for both methods and they reach the same conclusion.
+- ~15% `disagrees` — the actually-valuable signal. Over 7 days this
+  accumulates into real methodology-comparison data.
+
+**Architectural decisions locked in this session** (documented in
+`src/risk/advisor-v2-metrics.ts` header):
+1. `dsr-psr.ts` is canonical for new code. `walk-forward.ts`'s DSR
+   deprecated but not removed.
+2. `ADVISOR_V2_ENABLED` defaults OFF everywhere. Opt-in via systemd
+   drop-in per service.
+3. Shadow-only: v2 never overrides Wilson in this phase.
+4. `numCandidates` for DSR = `enabledKeys.size` (currently-active pairs).
+5. Benchmark Sharpe for PSR = 0.0 (vs-zero test). Cash-preservation mode.
+6. Brier reliability drift = log warning only, never auto-disable.
+
+### Analysis plan for the 7-day A/B window
+
+Daily reports should check:
+1. `journalctl -u polybot-v3 --since '24 hours ago' | grep 'classification: "disagrees"' | wc -l` —
+   count of real statistical disagreements
+2. For each disagreement: which action does Wilson pick and v2 pick?
+   Disagreements where v2='enable' and Wilson='keep' are particularly
+   interesting — v2 might be catching edge that win-rate-only misses.
+3. Distribution of `v2_psr` across all passed-filter subs — is it
+   bimodal (clear winners vs clear losers) or unimodal (all inconclusive)?
+4. Brier drift warnings — any sub with `v2_brier_reliability > 0.05` means
+   the calibrator is miscalibrated for that sub.
+
+After 7 days, a follow-up PR will:
+- Promote v2 to a voting role (e.g., require Wilson AND v2 agreement)
+- OR replace Wilson entirely with v2
+- OR add v2 as a third gate in series (Wilson → v2 → existing checks)
+
+Decision deferred to post-window.
+
+### Phase D — LlmNewsScout activated (commit `f967642`)
+
+ANTHROPIC_API_KEY provisioned to both VPS `.env` files via SCP (the
+key never passed through this chat — user wrote to local file, agent
+streamed via stdin to the remote script that populated and chmod'd
+both .env files, then the local file was deleted).
+
+`src/scouts/llm-news-scout.ts` un-stubbed. Now uses:
+- `@anthropic-ai/sdk ^0.67.0` — added to package.json, npm installed
+  on VPS, 6 new packages
+- Model: `claude-haiku-4-5-20251001` (~15× cheaper than Sonnet)
+- Prompt caching via `cache_control: ephemeral` on the system block.
+  Cost budget: ~$5-6/day at 10-min cadence
+- Fire-and-forget async via `void this.runAsync(sample)` so the 60s
+  scout coordinator tick never waits on the API
+- Internal 10-min minimum call interval via `lastCallAt` + `inflightCall`
+  guard to prevent async pileup
+- Semantic validation beyond schema: condition_id whitelist check,
+  reason length ≥20 chars, side/conviction sanity
+- Per-category conviction caps: politics/election 0.60, macro/fed/cpi 0.50,
+  sports 0.70, others global 0.80 floor
+- Fail-closed: empty intel list on any error
+- No price data in the prompt (PolySwarm feedback-loop prevention)
+
+**Verification:** Scout registered in coordinator, no more "ANTHROPIC_API_KEY
+not set" warning. First real API call fires at minute 10 of runtime
+(22:28:44 + 10min = ~22:38:44). Logs will show `LLM news scout tick complete`
+with findings_returned/intel_written/dropped_* counters.
+
 ## 2026-04-11 session — Phase A shipped + B/C staged (commits `a2192ff` → `f44cd66`)
 
 **Phase A (defensive hardening) — SHIPPED + VERIFIED live on VPS.** Four
