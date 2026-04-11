@@ -293,14 +293,30 @@ export class StrategyAdvisor {
         }
 
         if (v2Decision) {
-          const agrees = v2Decision.action === action;
+          // Three-way classification so the A/B window's disagreement
+          // rate isn't inflated by "v2 has no opinion yet":
+          //   - "insufficient_data": v2 lacks n, not actually disagreeing
+          //   - "agrees": both methods reached the same action
+          //   - "disagrees": both methods have an opinion and they differ
+          let classification: 'agrees' | 'disagrees' | 'insufficient_data';
+          let headline: string;
+          if (v2Decision.action === 'insufficient_data') {
+            classification = 'insufficient_data';
+            headline = 'Advisor v2 shadow — INSUFFICIENT DATA';
+          } else if (v2Decision.action === action) {
+            classification = 'agrees';
+            headline = 'Advisor v2 shadow — AGREES with Wilson';
+          } else {
+            classification = 'disagrees';
+            headline = 'Advisor v2 shadow — DISAGREES with Wilson';
+          }
           log.info(
             {
               strategy: pair.strategy_id,
               sub: pair.sub_strategy_id,
               wilson_action: action,
               v2_action: v2Decision.action,
-              agrees,
+              classification,
               v2_reason: v2Decision.reason,
               v2_n: v2Decision.n,
               v2_sharpe: roundMetric(v2Decision.sharpe),
@@ -315,7 +331,7 @@ export class StrategyAdvisor {
               v2_brier_reliability: v2Decision.brier_reliability !== null ? roundMetric(v2Decision.brier_reliability) : null,
               v2_brier_drift: v2Decision.brier_drift_warning,
             },
-            agrees ? 'Advisor v2 shadow — AGREES with Wilson' : 'Advisor v2 shadow — DISAGREES with Wilson',
+            headline,
           );
         }
       }
