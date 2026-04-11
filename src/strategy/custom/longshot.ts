@@ -110,7 +110,9 @@ export class LongshotStrategy extends BaseStrategy {
       ) {
         const key = `bucketed_fade:${m.condition_id}`;
         if (!this.recent.has(key)) {
-          const bucketedModelProb = calibratedProb ?? Math.min(0.99, impliedProb + expectedEdge * 1.5);
+          // bucketed_fade uses a wider fallback edge because 5-20¢ is peak
+          // bias territory. Fallback chain mirrors the top block.
+          const bucketedModelProb = ownCalibration ?? markovCalibration ?? Math.min(0.99, impliedProb + expectedEdge * 1.5);
           signals.push(
             this.buildFadeSignal(ctx, m, 'bucketed_fade', fadeSide, fadeTokenId, fadePrice, tailPrice, bucketedModelProb, expectedEdge * 1.5, 0.7, usingCalibration),
           );
