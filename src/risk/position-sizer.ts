@@ -126,13 +126,35 @@ export function calculatePositionSize(
     }
   }
 
-  // Floor: don't trade dust
-  sizeUsd = roundTo(sizeUsd, 2);
-  if (sizeUsd < 0.10) {
-    return { size_usd: 0, size_shares: 0, method: 'minimum', strategy_weight: stratWeight };
+  // 2026-04-11 fix: Polymarket CLOB enforces a minimum order size of 5 SHARES
+  // (not USD — 5 conditional tokens). At a favorite priced $0.80, that's $4.00.
+  // At $0.50, it's $2.50. Kelly-produced sub-5-share sizes get rejected by the
+  // CLOB with `Size (1.43) lower than the minimum: 5` and the position never
+  // opens. Prior to this fix, the dust floor was $0.10 which never triggered
+  // but also never clamped to the real CLOB minimum — most signals silently
+  // died at the CLOB layer.
+  //
+  // New rule: compute share count first, then clamp to max(5, sizer output).
+  // If the resulting USD exceeds the position cap, reject the signal entirely
+  // (can't open a valid-size position within the cap). If it fits, trade
+  // exactly 5 shares at the signal price.
+  const POLYMARKET_MIN_SHARES = 5.0;
+  let sizeShares = sizeUsd / signal.market_price;
+  if (sizeShares < POLYMARKET_MIN_SHARES) {
+    const minUsdForFloor = POLYMARKET_MIN_SHARES * signal.market_price;
+    // Can we afford 5 shares at this price under the cap?
+    if (minUsdForFloor <= pctCap && (limits.max_position_usd <= 0 || minUsdForFloor <= limits.max_position_usd)) {
+      sizeShares = POLYMARKET_MIN_SHARES;
+      sizeUsd = roundTo(minUsdForFloor, 2);
+      method = 'minimum';
+      cappedBy = 'floor at Polymarket 5-share minimum';
+    } else {
+      // Cap is too tight for a 5-share position at this price. Skip.
+      return { size_usd: 0, size_shares: 0, method: 'minimum', strategy_weight: stratWeight, capped_by: `Kelly ${sizeShares.toFixed(2)} shares < 5 min, cap too tight` };
+    }
   }
 
-  const sizeShares = sizeUsd / signal.market_price;
+  sizeUsd = roundTo(sizeUsd, 2);
 
   log.debug({
     entity: signal.entity_slug,
