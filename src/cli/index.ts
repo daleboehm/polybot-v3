@@ -259,7 +259,7 @@ program
   .description('Scan for Polymarket-Kalshi price divergence opportunities (read-only)')
   .option('--dry-run', 'Log opportunities without writing to DB', false)
   .option('--min-divergence <pct>', 'Minimum divergence %', '0.03')
-  .option('--min-volume <usd>', 'Minimum 24h volume both sides', '2000')
+  .option('--min-volume <usd>', 'Minimum 24h volume (Poly side); 0 = disabled since CLOB does not populate volume', '0')
   .action(async (opts) => {
     const config = loadConfig();
     const db = initDatabase(config.database.path);
