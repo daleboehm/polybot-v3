@@ -20,6 +20,7 @@ import { PortfolioRiskTracker } from '../risk/portfolio-risk.js';
 import { RegimeDetector } from '../market/regime-detector.js';
 import { TelegramAlerter } from '../metrics/alerter.js';
 import { PriorityScanner } from './priority-scanner.js';
+import { ScoutCoordinator } from '../scouts/scout-coordinator.js';
 import { metricsRegistry } from '../metrics/metrics.js';
 import type { Hex } from 'viem';
 import { buildOrder } from '../execution/order-builder.js';
@@ -77,6 +78,8 @@ export class Engine {
   private alerter: TelegramAlerter;
   // Phase 2 (2026-04-11): attention router for scout-flagged markets
   private priorityScanner: PriorityScanner | null = null;
+  // Phase 4 (2026-04-11): in-process scout fleet
+  private scoutCoordinator: ScoutCoordinator | null = null;
 
   private scanInterval: ReturnType<typeof setInterval> | null = null;
   private riskCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -357,6 +360,21 @@ export class Engine {
       this.priorityScanner.start();
     }
 
+    // Phase 4 (2026-04-11): start the scout fleet. Each scout watches
+    // the market cache for a specific pattern (volume spike, price jump,
+    // new listing, LLM news catalyst) and writes priority/intel rows
+    // that the PriorityScanner + scout-overlay downstream consume.
+    // Scouts are safe to run on either engine — they only read + write
+    // DB state, they never place orders.
+    if (this.config.scouts.enabled) {
+      this.scoutCoordinator = new ScoutCoordinator({
+        enabled: this.config.scouts.enabled,
+        interval_ms: this.config.scouts.interval_ms,
+        disabled_scouts: this.config.scouts.disabled_scouts,
+      });
+      this.scoutCoordinator.start(this.marketCache);
+    }
+
     // R3b: start Telegram alerter (subscribes to event bus for kill-switch + engine events)
     this.alerter.start();
 
@@ -381,6 +399,7 @@ export class Engine {
     if (this.snapshotInterval) clearInterval(this.snapshotInterval);
     if (this.advisorInterval) clearInterval(this.advisorInterval);
     if (this.priorityScanner) this.priorityScanner.stop();
+    if (this.scoutCoordinator) this.scoutCoordinator.stop();
     this.alerter.stop();
 
     this.samplingPoller.stop();

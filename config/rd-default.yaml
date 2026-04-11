@@ -68,3 +68,9 @@ priority_scanner:
   max_priorities_per_run: 25
   min_scan_gap_ms: 60000
   gc_every_n_runs: 60
+
+# Scout fleet — same defaults as prod.
+scouts:
+  enabled: true
+  interval_ms: 60000
+  disabled_scouts: []

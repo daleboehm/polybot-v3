@@ -50,6 +50,15 @@ export interface PriorityScannerConfig {
   gc_every_n_runs: number;
 }
 
+// Phase 4 (2026-04-11): in-process scout fleet. Scouts run inside the
+// engine, watch the market cache for patterns, and write priority /
+// intel rows that the PriorityScanner + scout-overlay consume.
+export interface ScoutsConfig {
+  enabled: boolean;
+  interval_ms: number;
+  disabled_scouts: string[];
+}
+
 export interface AppConfig {
   engine: EngineConfig;
   risk: RiskLimits;
@@ -59,5 +68,6 @@ export interface AppConfig {
   database: DatabaseConfig;
   advisor: AdvisorConfig;
   priority_scanner: PriorityScannerConfig;
+  scouts: ScoutsConfig;
   entities: EntityConfig[];
 }

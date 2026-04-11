@@ -116,3 +116,14 @@ priority_scanner:
   max_priorities_per_run: 25
   min_scan_gap_ms: 60000          # don't re-scan the same priority row more than 1x/min
   gc_every_n_runs: 60             # GC expired priority + intel rows every ~30 min
+
+# Scout fleet — in-process market watchers. Volume spike, price jump,
+# new listing, and LLM news scouts run on a 60-second tick inside the
+# engine process, watching the market cache for patterns and writing
+# priority/intel rows. llm-news-scout is a no-op without ANTHROPIC_API_KEY.
+# Add scout ids to `disabled_scouts` to kill specific scouts without
+# touching code.
+scouts:
+  enabled: true
+  interval_ms: 60000              # 60 seconds between ticks
+  disabled_scouts: []

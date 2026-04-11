@@ -116,6 +116,18 @@ const priorityScannerConfigSchema = z.object({
   gc_every_n_runs: z.number().int().positive().default(60),
 });
 
+// Phase 4 (2026-04-11): in-process scout fleet. The ScoutCoordinator
+// runs all registered scouts on a single timer. Each scout watches the
+// market cache for a specific pattern and writes priority/intel rows.
+// disabled_scouts can be used to kill individual scouts from yaml
+// without touching code (e.g. `disabled_scouts: ['llm-news-scout']` if
+// the API key is missing and we don't want a dormant scout in the loop).
+const scoutsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  interval_ms: z.number().positive().default(60_000),
+  disabled_scouts: z.array(z.string()).default([]),
+});
+
 export const defaultConfigSchema = z.object({
   engine: engineConfigSchema,
   risk: riskLimitsSchema,
@@ -125,6 +137,7 @@ export const defaultConfigSchema = z.object({
   database: databaseConfigSchema,
   advisor: advisorConfigSchema.default({}),
   priority_scanner: priorityScannerConfigSchema.default({}),
+  scouts: scoutsConfigSchema.default({}),
 });
 
 const entityStrategyConfigSchema = z.object({
