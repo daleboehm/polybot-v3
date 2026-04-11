@@ -292,6 +292,195 @@ program
     process.exit(result.errors.length > 0 ? 1 : 0);
   });
 
+// ─── REDEEM-ALL ─────────────────────────────────────────────
+// Phase -1 fix (2026-04-11): prod had 33 redeemable positions on-chain
+// worth ~$48.96 sitting in the CTF contract, never flowed back to the
+// wallet. The per-cycle engine reconciler doesn't call redeemPositions()
+// (intentionally deferred in R1 per the original design). This command
+// walks the Data API's full position list, filters `redeemable: true`,
+// groups by conditionId + outcome, and calls NegRiskRedeemer.redeem()
+// for each unique condition_id.
+//
+// Usage:
+//   polybot redeem-all --entity polybot [--limit N] [--dry-run]
+//
+// Default behavior: dry-run OFF, no limit. Use --dry-run to see what
+// would be redeemed without submitting any tx.
+program
+  .command('redeem-all')
+  .description('Call redeemPositions() for every redeemable position on an entity wallet')
+  .requiredOption('--entity <slug>', 'Entity slug (e.g. polybot)')
+  .option('--limit <n>', 'Redeem at most N positions then stop', '0')
+  .option('--dry-run', 'Log planned redemptions without submitting any tx', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    // Find the entity config + load its wallet credentials.
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) {
+      console.error(`Entity ${opts.entity} not found in config`);
+      process.exit(1);
+    }
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key) {
+      console.error(`No wallet credentials for ${opts.entity}`);
+      process.exit(1);
+    }
+    const proxyOrEoa = creds.proxy_address || creds.account_address;
+    if (!proxyOrEoa) {
+      console.error(`Entity ${opts.entity} has no proxy_address or account_address`);
+      process.exit(1);
+    }
+
+    // Fetch every position on-chain via the full /positions endpoint.
+    const { DataApiClient } = await import('../market/data-api-client.js');
+    const dataApi = new DataApiClient(config.api.data_api_base_url);
+    let allPositions;
+    try {
+      allPositions = await dataApi.getAllPositions(proxyOrEoa);
+    } catch (err) {
+      console.error(`Data API fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const redeemable = allPositions.filter(p => p.redeemable === true);
+    console.log(`\n=== Redeem All ===`);
+    console.log(`Wallet:         ${proxyOrEoa}`);
+    console.log(`Total positions: ${allPositions.length}`);
+    console.log(`Redeemable:      ${redeemable.length}`);
+    console.log(`Dry run:         ${opts.dryRun ? 'YES' : 'NO'}`);
+    const limit = Number(opts.limit) || 0;
+    if (limit > 0) console.log(`Limit:           ${limit}`);
+    console.log();
+
+    if (redeemable.length === 0) {
+      console.log('Nothing to redeem.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    // Group by conditionId. For a binary market, a single conditionId
+    // corresponds to both YES and NO tokens; we call redeemPositions once
+    // per conditionId with amounts sized by which outcome we hold.
+    //
+    // For negative-risk markets (most Polymarket weather/sports), we
+    // hold at most one outcome per conditionId, so amounts = [size] with
+    // positional indexing provided by the adapter itself. The existing
+    // NegRiskRedeemer.redeem() takes (conditionId, amounts[]) where
+    // amounts is a flat array. For neg-risk markets with one holding,
+    // we pass [sizeInTokens].
+    //
+    // Tokens are 6-decimal like USDC so sizeInTokens = floor(size * 1e6).
+    const byCondition = new Map<string, { title: string; totalSize: number; totalValue: number; cashPnl: number }>();
+    for (const p of redeemable) {
+      const existing = byCondition.get(p.conditionId);
+      const size = Number(p.size) || 0;
+      const value = Number(p.currentValue) || 0;
+      const pnl = Number(p.cashPnl) || 0;
+      if (existing) {
+        existing.totalSize += size;
+        existing.totalValue += value;
+        existing.cashPnl += pnl;
+      } else {
+        byCondition.set(p.conditionId, {
+          title: p.title || '?',
+          totalSize: size,
+          totalValue: value,
+          cashPnl: pnl,
+        });
+      }
+    }
+    console.log(`Unique condition IDs: ${byCondition.size}`);
+    console.log();
+
+    // Construct the redeemer
+    const { NegRiskRedeemer } = await import('../execution/neg-risk-redeemer.js');
+    const privateKeyHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const redeemer = new NegRiskRedeemer(privateKeyHex);
+
+    // Verify CTF approval once before looping (faster than hitting the
+    // same error 33 times). isAdapterApproved() uses the EOA from the
+    // private key, which is the correct subject for prod's direct-EOA
+    // wallet (wallet_address == EOA, no separate proxy).
+    if (!opts.dryRun) {
+      try {
+        const approved = await redeemer.isAdapterApproved();
+        if (!approved) {
+          console.error(`Wallet has NOT granted CTF approval to NegRiskAdapter.`);
+          console.error(`All redeemPositions calls will revert. Submit setApprovalForAll first.`);
+          process.exit(1);
+        }
+        console.log(`CTF approval verified.`);
+        console.log();
+      } catch (err) {
+        console.warn(`Approval check failed (will try anyway): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Walk the unique conditions and redeem each
+    let successes = 0;
+    let failures = 0;
+    let totalClaimedMicro = 0n;
+    let i = 0;
+    for (const [conditionId, agg] of byCondition.entries()) {
+      i++;
+      if (limit > 0 && i > limit) {
+        console.log(`Reached limit ${limit}, stopping.`);
+        break;
+      }
+
+      // Build the amounts array. For a neg-risk market (the common case),
+      // we hold a single outcome, and the redemption call takes the
+      // total token quantity for the outcome we hold. We express size
+      // as a 6-decimal integer (1e6 per token).
+      const amountMicro = BigInt(Math.floor(agg.totalSize * 1_000_000));
+      const amounts = [amountMicro];
+
+      console.log(`[${i}/${byCondition.size}] ${conditionId.substring(0, 20)}...`);
+      console.log(`    title:     ${agg.title.substring(0, 70)}`);
+      console.log(`    size:      ${agg.totalSize}`);
+      console.log(`    value:     $${agg.totalValue.toFixed(4)}`);
+      console.log(`    cashPnl:   $${agg.cashPnl.toFixed(4)}`);
+
+      if (opts.dryRun) {
+        console.log(`    DRY RUN — not submitting tx`);
+        console.log();
+        continue;
+      }
+
+      try {
+        const result = await redeemer.redeem(conditionId as `0x${string}`, amounts);
+        if (result.success) {
+          successes++;
+          totalClaimedMicro += result.usdcClaimed;
+          console.log(`    OK tx=${result.txHash}`);
+          console.log(`    claimed=${(Number(result.usdcClaimed) / 1e6).toFixed(4)} USDC`);
+        } else {
+          failures++;
+          console.log(`    FAIL: ${result.error}`);
+        }
+      } catch (err) {
+        failures++;
+        console.log(`    THREW: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      console.log();
+    }
+
+    console.log(`=== Summary ===`);
+    console.log(`Successes:      ${successes}`);
+    console.log(`Failures:       ${failures}`);
+    console.log(`USDC claimed:   $${(Number(totalClaimedMicro) / 1e6).toFixed(4)}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(failures > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')
