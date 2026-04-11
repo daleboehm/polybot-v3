@@ -2,6 +2,134 @@
 
 Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
 
+## 2026-04-11 session — Phase A shipped + B/C staged (commits `a2192ff` → `f44cd66`)
+
+**Phase A (defensive hardening) — SHIPPED + VERIFIED live on VPS.** Four
+research-backed fixes applied to existing code paths. Zero new
+strategies, zero new tables, zero new services. Every item tied to a
+primary source in the 6-agent research synthesis.
+
+### A1 — Tail-zone execution-mode override (commit `a2192ff`)
+New helpers in `markov-calibration.ts`: `isDeadBandZone(price)`,
+`preferredExecutionModeForTail(fadePrice)`. `longshot.ts` and
+`favorites.ts` (compounding/near_snipe/stratified_bias subs via
+`buildSignal`) now set `signal.metadata.preferred_execution_mode='taker'`
+when the side being bought is >0.95. In that zone single-sided makers
+collect zero reward score AND eat concentrated adverse selection —
+but the Becker empirical edge still dominates the -1.12% taker cost.
+
+`order-builder.ts` reads the metadata and overrides its default
+entry-maker policy. Verified live: longshot.systematic_fade at
+price 0.968 now routes as `taker`, in_dead_band=1. 51 dead-band
+signals flagged across favorites.fan_fade + longshot subs in a
+10-minute window.
+
+### A2 — Tick-size-weighted pricing + scout scoring (commit `a2192ff`)
+`OrderRequest` type extended with `minimum_tick_size`, populated from
+market-cache by `risk-engine` and threaded into `order-builder` for
+both the maker offset calculation AND the final roundToTick + clamp
+bounds. Previously hardcoded 0.01 meant 10× worse queue position on
+0.001-tick markets.
+
+`scout-base.ts` gains `tickSizePriorityBonus()`: +2 for coarse
+(≥0.1), +1 for standard (0.01), 0 for fine (0.001), -1 for
+ultra-fine. Applied in VolumeSpikeScout, PriceJumpScout, and
+NewListingScout so the attention router implicitly prioritizes
+higher-EV-per-fill markets.
+
+### A3 — Wash-trading penalty (commit `a2192ff` + `b95952f`)
+New module `src/market/wash-trading-penalty.ts`. Two-signal proxy for
+fake volume since we don't subscribe to Polygon logs yet:
+- `churnRatio = volume_24h / max(liquidity, $100)`
+  (>20x mild → 0.8x, >50x high → 0.5x, >100x extreme → 0.3x)
+- High-risk category tags (sports/election/politics/etc.) get an
+  extra 0.7x multiplier per Columbia Nov 2025 findings.
+
+Composite multiplier floored at 0.1. Wired into `position-sizer`
+between the strategy-weighter and the hard caps so it's a
+proportional haircut on suspicious markets — never zeros out.
+
+Follow-up commit `b95952f` added `tags: string[]` field to the
+`MarketData` type and populated it in `market-cache.ts` from the
+`SamplingMarket.tags` field that was already being pulled by the
+sampling-poller.
+
+### A4 — Price-conditioned maker-only gate (commit `a2192ff`)
+`order-builder.ts`:
+- Entries below 25¢ with `preferred_execution_mode='taker'` are now
+  **refused** (returns null). Kalshi 72M-trade analysis shows taker
+  losses average 32% in this zone — not worth any Markov edge.
+- Entries between 25¢-40¢ with taker override get **downgraded** back
+  to maker. Still accept possible no-fill over -1.12% guaranteed tax.
+- Exits bypass both rules (NO-LOSE mantra — if we need out, we need out).
+
+### Phase A verification snapshot (10 min window post-deploy)
+
+| Metric | Value |
+|---|---|
+| Total signals | 1344 |
+| Approved signals | 30 |
+| In dead-band (A1 flagged) | 51 |
+| longshot.systematic_fade dead-band | 25 |
+| longshot.bucketed_fade dead-band | 21 |
+| favorites.fan_fade dead-band | 5 |
+| Errors across both engines | 0 |
+
+Stratified_bias gets the most rejections because it's in the noisy
+45-55¢ zone where the wash-trading penalty can reduce size below the
+dust floor. Expected behavior.
+
+### Phase B — STAGED (commit `bd6860d`)
+
+Two new validation modules committed + typechecked + built into dist,
+but NOT imported anywhere yet. They will be wired into the
+StrategyAdvisor in a follow-up session after Phase A's 24h
+verification gate clears.
+
+- `src/validation/stats-helpers.ts` — shared `normalCdf`, `sampleMean`,
+  `sampleVariance`, `sampleStd`, `sampleSkew`, `sampleKurtosis`,
+  `sharpeRatio`, `EULER_MASCHERONI`. Abramowitz & Stegun 26.2.17
+  rational approximation for Φ(x) (max error ~7.5e-8).
+
+- `src/validation/dsr-psr.ts` — `probabilisticSharpeRatio` (PSR),
+  `minimumTrackRecordLength` (MinTRL), `expectedMaxSharpeUnderNull`,
+  and a raw-returns-taking `deflatedSharpeRatio` returning a
+  `DsrResult` shape with sharpe/benchmark/dsr/n/skew/kurtosis.
+
+- `src/validation/brier.ts` augmented with `reliabilityScalar` and
+  `uncertainty` fields to complete the Murphy 1973 decomposition
+  identity: `score ≈ reliabilityScalar - resolution + uncertainty`.
+
+Note: `walk-forward.ts` already has a `deflatedSharpeRatio` from an
+earlier R2 PR. The new `dsr-psr.ts` is the successor with three
+improvements: takes raw returns (not pre-computed moments), adds PSR
++ MinTRL, uses shared stats-helpers.ts numerics. The walk-forward
+version is kept for backward compat.
+
+### Phase C — STAGED (commit `f44cd66`)
+
+`src/scouts/leaderboard-poller-scout.ts` — scaffolds the highest-leverage
+whale detection signal from the research synthesis. Polls
+`data-api.polymarket.com/leaderboards?window=week` every 10 minutes
+(fire-and-forget async inside the 60s scout tick; errors swallowed to
+logs so they never halt other scouts). Parses the raw JSON into typed
+`LeaderboardEntry` objects sorted by weekly profit.
+
+Currently logs-only. Three follow-up items needed to activate:
+- **C1a** — CREATE TABLE `smart_money_candidates` + migration
+- **C1b** — `upsertCandidate()` in a new `smart-money-repo.ts`
+- **C1c** — register the scout in `scout-coordinator.registerDefaultScouts()`
+           and add a `scouts.disabled_scouts` opt-out
+
+Not yet imported or registered. Committed for review + typecheck.
+
+### Phases D-G — BLOCKED
+
+- **D** blocked on `ANTHROPIC_API_KEY` provisioning on the VPS
+- **E** blocked on Dale manual watching for the $1 mainnet test
+- **F** blocked on Phase B advisor-v2 7-day A/B window
+- **G** blocked on 2+ weeks of Phase C reward-farming scout data
+
 ## 2026-04-11 session — attention router + scout fleet (commits `e5d951f` → `9e3c53a`)
 
 **Four-phase build shipped in one session.** This is the big one — it

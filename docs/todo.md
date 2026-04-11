@@ -6,7 +6,28 @@ Updated: 2026-04-11 (attention router + scout fleet shipped)
 
 ### Today's verification tasks (first 15 min of next session)
 
-0. **Scout fleet signal review** — the big new thing. After 24h+ of runtime check:
+**0a. Phase A 24h gate — CRITICAL BEFORE Phase B activation.** After 24h of
+runtime with Phase A live (commits a2192ff + b95952f), check:
+- `v_strategy_performance` approval rates BEFORE vs AFTER a2192ff — no
+  strategy should have dropped by more than its normal variation.
+  Expected: longshot and favorites.near_snipe see lower approval rates
+  (they're eating the A1 taker routing and the A3 churn haircut).
+- `sqlite3 rd.db "SELECT strategy_id, sub_strategy_id, COUNT(*), SUM(CASE WHEN approved=1 THEN 1 ELSE 0 END) FROM signals WHERE created_at >= datetime('now','-24 hours') GROUP BY strategy_id, sub_strategy_id;"`
+- `journalctl -u polybot-v3-rd --since '24 hours ago' | grep -c 'A4 gate'` —
+  count of A4 refusals. Zero is fine (few signals below 25¢); high count
+  means the A1 taker routing is too aggressive.
+- `sqlite3 rd.db "SELECT AVG(CASE WHEN json_extract(metadata,'$.in_dead_band')=1 THEN 1.0 ELSE 0.0 END) FROM signals WHERE created_at >= datetime('now','-24 hours');"` —
+  fraction of signals in dead-band zone. Should be 2-5%.
+- No new errors in journalctl since a2192ff deploy time.
+
+**If 0a passes:** proceed with Phase B activation — wire dsr-psr.ts + brier
+decomposition into the StrategyAdvisor behind an `ADVISOR_V2_ENABLED`
+feature flag. Run 7-day A/B against the existing Wilson LB gating.
+
+**If 0a fails:** identify the regressing strategy, narrow the A1/A3/A4
+rule that caused it, and ship a fix before Phase B.
+
+0. **Scout fleet signal review** — the big new thing from the prior session. After 24h+ of runtime check:
    - `journalctl -u polybot-v3-rd --since '1 hour ago' | grep -iE 'spike|jump|flagged|Scout tick'` — confirm scouts are firing real findings
    - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*), MAX(priority), MIN(created_at), MAX(created_at) FROM market_priorities GROUP BY created_by;'` — priority rows per scout
    - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*) FROM scout_intel GROUP BY created_by;'` — qualitative intel rows
