@@ -2,6 +2,49 @@
 
 Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
 
+## 2026-04-11 session — prod parity patch (commit `0249404`)
+
+**Ensured prod has all the calibration brains it needs.** Wired the Markov
+empirical grid into `favorites.ts` (compounding, near_snipe, stratified_bias,
+fan_fade) and `convergence.ts` (filtered_high_prob, long_term_grind). These
+strategies now have the same 3-step probability fallback chain `longshot.ts`
+already had:
+
+1. **Own-data baseRateCalibrator** — Wilson LB from our own resolutions
+2. **Markov empirical grid** — Becker 72.1M-trade industry calibration (new)
+3. **Naive heuristic** — last resort, should almost never fire
+
+Added side-aware `calibratedSideProb(price, side)` helper in
+`src/market/markov-calibration.ts` that handles YES/NO symmetry so favorites
+and fan_fade can consume it regardless of which side they're betting.
+
+### Signal audit post-deploy (15-min window)
+
+| Strategy | Sub | Signals | Approved | Avg edge | Source |
+|---|---|---|---|---|---|
+| favorites | compounding | 816 | 3 | +0.80pp | Markov |
+| favorites | stratified_bias | 320 | 0 | +0.24pp | Markov |
+| favorites | fan_fade | 82 | 0 | −1.16pp | Markov |
+| convergence | long_term_grind | 327 | 0 | **−97pp** | own-data |
+| convergence | long_term_grind | 139 | 0 | +0.85pp | Markov |
+
+### Findings from signal audit
+
+- **Prod has 244 total resolutions** across 12 sub-strategies (not zero as
+  previously assumed). Top buckets: convergence.long_term_grind (81),
+  favorites.compounding (56), longshot subs (~60 combined), weather_forecast (12).
+- **Own-data calibrator now firing for prod** in price buckets with ≥10
+  resolutions. Markov fills the gap for buckets below the threshold.
+- **`convergence.long_term_grind` is a losing strategy per prod's own data** —
+  327 signals in 15 min with avg edge −97pp. Wilson LB on resolved positions
+  is far below market price. All signals being rejected at min_edge gate.
+  StrategyAdvisor should catch this and disable the sub on next run (10 min).
+- **Signal volume collapsed toward high-edge strategies** — before this patch,
+  strategies fired on naive `price + constant` heuristics. After, only
+  near_snipe / filtered_high_prob / longshot / weather / crypto / signal-feed
+  strategies will reliably clear the 1.5% min_edge gate. Exactly the tightening
+  Dale wanted.
+
 ## 2026-04-11 session — 4 phases shipped
 
 All deployed to VPS (commits through `3ab1825`), prod + R&D restarted:

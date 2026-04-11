@@ -12,6 +12,8 @@ Updated: 2026-04-11 (post-maker/taker + Markov + research-capture session)
    - If fill rate <50% over 24h, consider shrinking the 1-tick delta or switching specific strategies back to taker
 2. **Verify Markov longshot signals** — query recent longshot signals where `metadata.bias_multiplier != 1.0`. Confirm YES-side <20¢ signals are being sized down and NO-side signals sized up.
 3. **Check `markov-calibration.ts` didn't break anything** — look for any edge-report logs showing NaN or unexpected probabilities.
+4. **Check advisor disabled `convergence.long_term_grind` on prod** — the patch exposed that prod's 81 own-data resolutions for this sub are producing avg edge −97pp on new signals. Advisor runs every 10 min with Wilson LB gating. Verify it has disabled the sub by the time the next session starts. If NOT disabled, check advisor config thresholds — something is likely blocking the disable path.
+5. **Check prod signal volume per sub** — after the Markov patch (`0249404`), prod's signal-generation profile should tighten dramatically toward strategies with actual edge (near_snipe, filtered_high_prob, longshot.*, weather, crypto, sportsbook_fade, cross_market, macro_forecast). Strategies with tautological pre-patch fallbacks (compounding, stratified_bias, fan_fade at mid-price, long_term_grind) should see very few approvals at the 1.5% min_edge gate. If any of those subs are still approving >5% of signals, debug the Markov wiring.
 
 ### Top priority for next session (from 2026-04-10, still relevant)
 
