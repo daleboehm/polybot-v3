@@ -362,36 +362,52 @@ program
       process.exit(0);
     }
 
-    // Group by conditionId. For a binary market, a single conditionId
-    // corresponds to both YES and NO tokens; we call redeemPositions once
-    // per conditionId with amounts sized by which outcome we hold.
+    // Group by conditionId. NegRiskAdapter.redeemPositions() has this
+    // calling convention (from Polymarket's own contract source at
+    // github.com/Polymarket/neg-risk-ctf-adapter):
     //
-    // For negative-risk markets (most Polymarket weather/sports), we
-    // hold at most one outcome per conditionId, so amounts = [size] with
-    // positional indexing provided by the adapter itself. The existing
-    // NegRiskRedeemer.redeem() takes (conditionId, amounts[]) where
-    // amounts is a flat array. For neg-risk markets with one holding,
-    // we pass [sizeInTokens].
+    //   _amounts should always have length 2, with the first element
+    //   being the amount of YES tokens to redeem and the second element
+    //   being the amount of NO tokens to redeem.
     //
-    // Tokens are 6-decimal like USDC so sizeInTokens = floor(size * 1e6).
-    const byCondition = new Map<string, { title: string; totalSize: number; totalValue: number; cashPnl: number }>();
+    // So for each unique conditionId we need to aggregate the YES-side
+    // size and the NO-side size separately, then call
+    //   redeemPositions(conditionId, [yesMicro, noMicro])
+    //
+    // For a typical Polymarket position we hold ONE side per conditionId,
+    // so one of yesSize/noSize is 0 and the other is the full position size.
+    //
+    // Tokens are 6-decimal (USDC-denominated) → sizeMicro = floor(size * 1e6)
+    const byCondition = new Map<string, {
+      title: string;
+      yesSize: number;
+      noSize: number;
+      totalValue: number;
+      cashPnl: number;
+    }>();
     for (const p of redeemable) {
-      const existing = byCondition.get(p.conditionId);
+      const existing = byCondition.get(p.conditionId) ?? {
+        title: p.title || '?',
+        yesSize: 0,
+        noSize: 0,
+        totalValue: 0,
+        cashPnl: 0,
+      };
       const size = Number(p.size) || 0;
       const value = Number(p.currentValue) || 0;
       const pnl = Number(p.cashPnl) || 0;
-      if (existing) {
-        existing.totalSize += size;
-        existing.totalValue += value;
-        existing.cashPnl += pnl;
+      const outcomeUpper = (p.outcome ?? '').toString().toUpperCase();
+      if (outcomeUpper === 'YES') {
+        existing.yesSize += size;
+      } else if (outcomeUpper === 'NO') {
+        existing.noSize += size;
       } else {
-        byCondition.set(p.conditionId, {
-          title: p.title || '?',
-          totalSize: size,
-          totalValue: value,
-          cashPnl: pnl,
-        });
+        console.log(`    WARN: unknown outcome "${p.outcome}" for ${p.conditionId.substring(0, 14)} — skipping`);
+        continue;
       }
+      existing.totalValue += value;
+      existing.cashPnl += pnl;
+      byCondition.set(p.conditionId, existing);
     }
     console.log(`Unique condition IDs: ${byCondition.size}`);
     console.log();
@@ -434,16 +450,15 @@ program
         break;
       }
 
-      // Build the amounts array. For a neg-risk market (the common case),
-      // we hold a single outcome, and the redemption call takes the
-      // total token quantity for the outcome we hold. We express size
-      // as a 6-decimal integer (1e6 per token).
-      const amountMicro = BigInt(Math.floor(agg.totalSize * 1_000_000));
-      const amounts = [amountMicro];
+      // Build the amounts array per the NegRiskAdapter convention:
+      // [yesAmount, noAmount] with 6-decimal precision.
+      const yesMicro = BigInt(Math.floor(agg.yesSize * 1_000_000));
+      const noMicro = BigInt(Math.floor(agg.noSize * 1_000_000));
+      const amounts = [yesMicro, noMicro];
 
       console.log(`[${i}/${byCondition.size}] ${conditionId.substring(0, 20)}...`);
       console.log(`    title:     ${agg.title.substring(0, 70)}`);
-      console.log(`    size:      ${agg.totalSize}`);
+      console.log(`    yes/no:    ${agg.yesSize} / ${agg.noSize}`);
       console.log(`    value:     $${agg.totalValue.toFixed(4)}`);
       console.log(`    cashPnl:   $${agg.cashPnl.toFixed(4)}`);
 
