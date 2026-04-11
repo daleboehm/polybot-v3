@@ -9,6 +9,7 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
+import { calibratedSideProb } from '../../market/markov-calibration.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -56,14 +57,26 @@ export class FavoritesStrategy extends BaseStrategy {
       const favoriteTokenId = yesPrice >= noPrice ? market.token_yes_id : market.token_no_id;
       const payoff = (1.0 - favoritePrice) / favoritePrice;
 
-      // R2 PR#1 base-rate calibration (2026-04-10): prefer the empirical Wilson LB
-      // from historical resolutions in this price bucket. Falls back to the old
-      // tautological `favoritePrice + payoff * 0.5` when there's insufficient
-      // history — but the fallback is explicitly marked so the advisor can de-rate
-      // any sub still running on fallback rather than calibrated data.
-      const calibratedProb = baseRateCalibrator.getBaseRate(this.id, favoritePrice);
-      const usingCalibration = calibratedProb !== null;
-      const modelProb = calibratedProb ?? (favoritePrice + payoff * 0.5);
+      // Probability fallback chain (Phase 3, 2026-04-11):
+      //   1. own-data base-rate calibrator — Wilson LB from our own resolved
+      //      favorites positions bucketed by entry price. Best signal when
+      //      available but prod has ~0 resolutions so it usually returns null.
+      //   2. Markov empirical grid — Becker 72.1M-trade industry-wide
+      //      calibration. Always has a value, grounded in real resolved
+      //      Polymarket/Kalshi data across all strategy categories. This is
+      //      the prod-critical step: without it, prod flies on the naive
+      //      heuristic almost every signal.
+      //   3. naive `favoritePrice + payoff * 0.5` — last resort, retained
+      //      only as a defensive fallback in case the Markov helper
+      //      ever returns NaN.
+      const ownCalibration = baseRateCalibrator.getBaseRate(this.id, favoritePrice);
+      const markovCalibration = calibratedSideProb(favoritePrice, favoriteSide);
+      const usingOwnCalibration = ownCalibration !== null;
+      const usingMarkovCalibration = !usingOwnCalibration && Number.isFinite(markovCalibration);
+      const usingCalibration = usingOwnCalibration || usingMarkovCalibration;
+      const modelProb =
+        ownCalibration ??
+        (Number.isFinite(markovCalibration) ? markovCalibration : (favoritePrice + payoff * 0.5));
 
       // ─── sub: compounding (now 0.50-0.85 — audit A-P1-4 boundary fix) ───
       // Previously 0.50-0.92 which overlapped with fan_fade (0.85-0.92), causing
@@ -77,7 +90,7 @@ export class FavoritesStrategy extends BaseStrategy {
       ) {
         const key = `compounding:${market.condition_id}`;
         if (!this.recentTrades.has(key)) {
-          signals.push(this.buildSignal(ctx, market, 'compounding', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.7, usingCalibration));
+          signals.push(this.buildSignal(ctx, market, 'compounding', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.7, usingCalibration, usingOwnCalibration, usingMarkovCalibration));
           this.recentTrades.set(key, now);
         }
       }
@@ -90,7 +103,7 @@ export class FavoritesStrategy extends BaseStrategy {
       ) {
         const key = `near_snipe:${market.condition_id}`;
         if (!this.recentTrades.has(key)) {
-          signals.push(this.buildSignal(ctx, market, 'near_snipe', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.9));
+          signals.push(this.buildSignal(ctx, market, 'near_snipe', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.9, usingCalibration, usingOwnCalibration, usingMarkovCalibration));
           this.recentTrades.set(key, now);
         }
       }
@@ -103,7 +116,7 @@ export class FavoritesStrategy extends BaseStrategy {
       ) {
         const key = `stratified_bias:${market.condition_id}`;
         if (!this.recentTrades.has(key)) {
-          signals.push(this.buildSignal(ctx, market, 'stratified_bias', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.5));
+          signals.push(this.buildSignal(ctx, market, 'stratified_bias', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.5, usingCalibration, usingOwnCalibration, usingMarkovCalibration));
           this.recentTrades.set(key, now);
         }
       }
@@ -118,6 +131,16 @@ export class FavoritesStrategy extends BaseStrategy {
         const underdogSide: 'YES' | 'NO' = favoriteSide === 'YES' ? 'NO' : 'YES';
         const underdogPrice = 1 - favoritePrice;
         const underdogTokenId = favoriteSide === 'YES' ? market.token_no_id : market.token_yes_id;
+        // Markov calibration for the underdog side. The Becker grid shows
+        // that at 10-15¢ (typical underdog price), empirical resolution runs
+        // 8.9-13.7% — close to implied but with slight overpricing that
+        // favors fading. We use the grid as model_prob so the advisor can
+        // track whether fan_fade is actually capturing the residual edge.
+        const underdogMarkovProb = calibratedSideProb(underdogPrice, underdogSide);
+        const underdogModelProb = Number.isFinite(underdogMarkovProb)
+          ? underdogMarkovProb
+          : underdogPrice + 0.05;
+        const underdogEdge = underdogModelProb - underdogPrice;
         const key = `fan_fade:${market.condition_id}`;
         if (!this.recentTrades.has(key)) {
           signals.push({
@@ -130,8 +153,8 @@ export class FavoritesStrategy extends BaseStrategy {
             side: 'BUY',
             outcome: underdogSide,
             strength: 0.4,
-            edge: 0.05,
-            model_prob: underdogPrice + 0.05,
+            edge: underdogEdge,
+            model_prob: underdogModelProb,
             market_price: underdogPrice,
             recommended_size_usd: 3,
             metadata: {
@@ -139,6 +162,7 @@ export class FavoritesStrategy extends BaseStrategy {
               sub_strategy: 'fan_fade',
               hours_to_resolve: hoursToResolve,
               hyped_favorite_price: favoritePrice,
+              using_markov_calibration: Number.isFinite(underdogMarkovProb),
             },
             created_at: new Date(),
           });
@@ -170,11 +194,16 @@ export class FavoritesStrategy extends BaseStrategy {
     hoursToResolve: number,
     strength = 0.7,
     usingCalibration = false,
+    usingOwnCalibration = false,
+    usingMarkovCalibration = false,
   ): Signal {
-    // Real edge = calibrated probability - market price, NOT the old `payoff * 0.5`
-    // heuristic. When the calibrator has data, this is a real statistical edge.
-    // When it doesn't, edge falls back to `payoff * 0.5` so the min_edge gate
-    // still triggers on obvious high-payoff markets.
+    // Real edge = calibrated probability - market price. Two calibration
+    // sources can drive `usingCalibration = true`: (a) our own resolved
+    // positions via baseRateCalibrator, (b) Becker's 72.1M-trade Markov
+    // empirical grid. Either way, the edge is `modelProb - price`, a real
+    // statistical edge vs the market. The naive `payoff * 0.5` fallback is
+    // only reachable if both calibration sources return unusable values,
+    // which should be ~never in practice.
     const clampedModelProb = Math.min(0.99, modelProb);
     const edge = usingCalibration ? (clampedModelProb - price) : (payoff * 0.5);
     return {
@@ -200,6 +229,8 @@ export class FavoritesStrategy extends BaseStrategy {
         payoff_ratio: Math.round(payoff * 1000) / 1000,
         sub_strategy: subStrategyId,
         using_calibration: usingCalibration,
+        using_own_calibration: usingOwnCalibration,
+        using_markov_calibration: usingMarkovCalibration,
       },
       created_at: new Date(),
     };

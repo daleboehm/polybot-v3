@@ -111,6 +111,35 @@ export function empiricalYesEdge(marketPrice: number): number {
 }
 
 /**
+ * Side-aware calibration for favorites / convergence / any strategy that isn't
+ * fading YES specifically. Given a contract's market price and which side
+ * the strategy is betting on, returns the empirical probability that side
+ * actually resolves.
+ *
+ * Phase 3 note (2026-04-11): prod's base-rate calibrator returns null for
+ * almost all markets because prod only has a few dozen resolved positions
+ * and the minBucketN=10 gate rarely triggers. Strategies that consume this
+ * helper should use it as the SECOND fallback step in their probability
+ * chain — after the own-data calibrator, before any naive `price + constant`
+ * heuristic. This gives prod a real empirical anchor based on Becker's
+ * 72.1M-trade dataset even before its own resolutions accumulate.
+ *
+ * Symmetry: `calibratedYesProb(p)` is the empirical rate a contract priced
+ * at p resolves YES. For a BUY on the NO side at price p, the contract is
+ * the NO share priced at p (meaning YES is priced at 1 - p). The empirical
+ * NO-resolution rate is therefore `1 - calibratedYesProb(1 - p)`.
+ */
+export function calibratedSideProb(
+  marketPrice: number,
+  side: 'YES' | 'NO',
+): number {
+  if (side === 'YES') return calibratedYesProb(marketPrice);
+  // NO side at price p. YES side is at (1 - p). Empirical YES rate at (1-p)
+  // → NO rate = 1 - that.
+  return 1 - calibratedYesProb(1 - marketPrice);
+}
+
+/**
  * Size multiplier for longshot positions based on the Optimism Tax.
  * At extremes (< 5¢ or > 95¢), shrinks size on the YES side and grows size
  * on the NO side. In the 20-80¢ neutral zone, returns 1.0 (no adjustment).
