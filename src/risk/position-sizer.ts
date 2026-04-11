@@ -14,7 +14,9 @@
 
 import type { Signal, RiskLimits, EntityState } from '../types/index.js';
 import type { StrategyWeighter } from './strategy-weighter.js';
+import type { MarketCache } from '../market/market-cache.js';
 import { kellySize, roundTo } from '../utils/math.js';
+import { computeLiquidityBound, logLiquidityEvent } from './liquidity-check.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('position-sizer');
@@ -32,6 +34,7 @@ export function calculatePositionSize(
   entity: EntityState,
   limits: RiskLimits,
   strategyWeighter?: StrategyWeighter,
+  marketCache?: MarketCache,
 ): SizingResult {
   const tradingBalance = entity.trading_balance;
   if (tradingBalance <= 0) {
@@ -78,6 +81,27 @@ export function calculatePositionSize(
     sizeUsd = limits.max_position_usd;
     method = 'cap';
     cappedBy = `$${limits.max_position_usd} absolute cap`;
+  }
+
+  // 2026-04-11 Phase 1.3: liquidity-aware bound. Refuse to walk the book
+  // more than ~2% on the avg fill. Pure defensive layer — we never INCREASE
+  // size here, only shrink. Failing gracefully if the book is unavailable
+  // (returns the requested size + logs a warning).
+  if (marketCache) {
+    const book = marketCache.getOrderbook(signal.token_id);
+    const liq = computeLiquidityBound(sizeUsd, signal.market_price, book, {
+      maxSlippagePct: 0.02,
+    });
+    logLiquidityEvent(liq, {
+      strategy_id: signal.strategy_id,
+      condition_id: signal.condition_id,
+      token_id: signal.token_id,
+    });
+    if (liq.max_size_usd < sizeUsd) {
+      sizeUsd = liq.max_size_usd;
+      method = 'cap';
+      cappedBy = `liquidity bound (avg fill ${liq.avg_fill_price.toFixed(3)} vs midpoint ${signal.market_price.toFixed(3)})`;
+    }
   }
 
   // Floor: don't trade dust

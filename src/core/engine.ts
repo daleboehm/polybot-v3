@@ -95,7 +95,7 @@ export class Engine {
     // on prod because prod only trades advisor-validated strategies at baseline
     // sizing.
     const isRdMode = (process.env.BASE_PATH ?? '') === '/rd';
-    this.riskEngine = new RiskEngine(config.risk, isRdMode);
+    this.riskEngine = new RiskEngine(config.risk, isRdMode, this.marketCache);
     this.dailyLossGuard = new DailyLossGuard(this.entityManager, config.risk);
     this.stopLossMonitor = new StopLossMonitor(config.risk);
     this.dataApiClient = new DataApiClient(config.api.data_api_base_url);

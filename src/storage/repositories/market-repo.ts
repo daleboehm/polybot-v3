@@ -63,6 +63,7 @@ export function updateMarketMetadata(
     market_slug?: string;
     active?: number;
     closed?: number;
+    uma_resolution_status?: string;
   },
 ): void {
   const db = getDatabase();
@@ -87,6 +88,10 @@ export function updateMarketMetadata(
   if (fields.closed !== undefined) {
     sets.push('closed = ?');
     values.push(fields.closed);
+  }
+  if (fields.uma_resolution_status !== undefined) {
+    sets.push('uma_resolution_status = ?');
+    values.push(fields.uma_resolution_status);
   }
   if (sets.length === 0) return;
   sets.push("last_updated = datetime('now')");

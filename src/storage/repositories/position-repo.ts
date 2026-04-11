@@ -115,6 +115,53 @@ export function getAllOpenPositions(): PositionRow[] {
   return db.prepare("SELECT * FROM positions WHERE status = 'open' ORDER BY entity_slug, opened_at DESC").all() as PositionRow[];
 }
 
+// 2026-04-11 Phase 1.5: sum of open cost_basis per strategy_id for a given
+// entity. Used by the per-strategy capital envelope in risk-engine to cap
+// the total capital any one strategy can tie up, so a buggy strategy can't
+// drain the bankroll before daily loss lockout trips.
+//
+// Returns an object keyed by strategy_id. NULL strategy_ids (orphan
+// reconciler-inserted positions) are aggregated under the key "__orphan".
+export function getDeployedByStrategy(entitySlug: string): Record<string, number> {
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT COALESCE(strategy_id, '__orphan') AS strategy_id,
+           SUM(cost_basis) AS total_cost
+    FROM positions
+    WHERE entity_slug = ? AND status = 'open'
+    GROUP BY COALESCE(strategy_id, '__orphan')
+  `).all(entitySlug) as Array<{ strategy_id: string; total_cost: number }>;
+  const out: Record<string, number> = {};
+  for (const row of rows) {
+    out[row.strategy_id] = row.total_cost ?? 0;
+  }
+  return out;
+}
+
+// 2026-04-11 Phase 1.6: positions pre-joined with market metadata for the
+// dashboard. Includes end_date + uma_resolution_status so the frontend can
+// render triage states (overdue / uma_pending / dispute) without needing a
+// separate /api/markets/all call.
+export interface PositionWithMarketRow extends PositionRow {
+  market_end_date: string | null;
+  uma_resolution_status: string | null;
+  market_question_joined: string | null;
+}
+export function getOpenPositionsWithMarketMeta(entitySlug: string): PositionWithMarketRow[] {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT
+      p.*,
+      m.end_date              AS market_end_date,
+      m.uma_resolution_status AS uma_resolution_status,
+      m.question              AS market_question_joined
+    FROM positions p
+    LEFT JOIN markets m ON p.condition_id = m.condition_id
+    WHERE p.entity_slug = ? AND p.status = 'open'
+    ORDER BY m.end_date ASC NULLS LAST, p.opened_at DESC
+  `).all(entitySlug) as PositionWithMarketRow[];
+}
+
 export function getPosition(entitySlug: string, conditionId: string, tokenId: string): PositionRow | undefined {
   const db = getDatabase();
   return db.prepare(

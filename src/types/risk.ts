@@ -17,6 +17,7 @@ export interface RiskLimits {
   min_hours_to_resolve?: number;    // 1 — global short-horizon filter floor (Dale 2026-04-10)
   max_hours_to_resolve?: number;    // 48 — global short-horizon filter ceiling
   tiered_stops: TieredStop[];
+  max_strategy_envelope_pct?: number; // 0.25 — per-strategy capital cap (Phase 1.5, 2026-04-11)
 }
 
 export interface TieredStop {

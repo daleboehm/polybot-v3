@@ -31,6 +31,13 @@ const riskLimitsSchema = z.object({
   min_hours_to_resolve: z.number().min(0).default(1),
   max_hours_to_resolve: z.number().min(0).default(48),
   tiered_stops: z.array(tieredStopSchema).default([]),
+  // 2026-04-11 Phase 1.5: per-strategy capital envelope. Each strategy_id
+  // can tie up at most this fraction of trading_balance before the risk
+  // engine blocks new entries. Orphan positions (strategy_id = NULL) are
+  // counted under "__orphan" and share the same default cap. A buggy
+  // strategy cannot drain the bankroll; it gets its envelope and stops.
+  // Set to 0 to disable the check entirely.
+  max_strategy_envelope_pct: z.number().min(0).max(1).default(0.25),
 });
 
 const engineConfigSchema = z.object({

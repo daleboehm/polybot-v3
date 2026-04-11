@@ -1,9 +1,11 @@
 // Pre-trade and post-trade risk checks — gates every order
 
 import type { Signal, RiskCheck, RiskViolation, RiskLimits, EntityState, StrategyDecision, OrderRequest } from '../types/index.js';
+import type { MarketCache } from '../market/market-cache.js';
 import { calculatePositionSize } from './position-sizer.js';
 import { StrategyWeighter } from './strategy-weighter.js';
 import { getOpenOrders } from '../storage/repositories/order-repo.js';
+import { getDeployedByStrategy } from '../storage/repositories/position-repo.js';
 import { insertSignal } from '../storage/repositories/signal-repo.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
@@ -13,11 +15,13 @@ const log = createChildLogger('risk-engine');
 
 export class RiskEngine {
   private strategyWeighter: StrategyWeighter | undefined;
+  private marketCache?: MarketCache;
 
-  constructor(private limits: RiskLimits, enableWeighting = false) {
+  constructor(private limits: RiskLimits, enableWeighting = false, marketCache?: MarketCache) {
     if (enableWeighting) {
       this.strategyWeighter = new StrategyWeighter();
     }
+    this.marketCache = marketCache;
   }
 
   evaluate(signal: Signal, entity: EntityState): StrategyDecision {
@@ -94,6 +98,33 @@ export class RiskEngine {
       });
     }
 
+    // 2026-04-11 Phase 1.5: per-strategy capital envelope.
+    // Each strategy_id can tie up at most max_strategy_envelope_pct of
+    // trading_balance. Blocks new entries from a strategy that's already
+    // at its cap. Exits bypass (reducing a position is always allowed).
+    // Set max_strategy_envelope_pct to 0 to disable the check.
+    const envelopePct = this.limits.max_strategy_envelope_pct ?? 0.25;
+    if (!isExit && envelopePct > 0 && signal.strategy_id) {
+      const envelopeCapUsd = entity.trading_balance * envelopePct;
+      if (envelopeCapUsd > 0) {
+        const deployedByStrategy = getDeployedByStrategy(entity.config.slug);
+        const currentDeployed = deployedByStrategy[signal.strategy_id] ?? 0;
+        // Use the recommended signal size as a proxy for the incoming trade;
+        // the actual sized USD isn't computed yet at this point in evaluate().
+        // This is conservative: the real fill may be smaller due to caps.
+        const proposedIncrement = signal.recommended_size_usd ?? 0;
+        if (currentDeployed + proposedIncrement > envelopeCapUsd) {
+          violations.push({
+            rule: 'strategy_envelope',
+            message: `strategy ${signal.strategy_id} deployed $${currentDeployed.toFixed(2)} + proposed $${proposedIncrement.toFixed(2)} > envelope cap $${envelopeCapUsd.toFixed(2)} (${(envelopePct * 100).toFixed(0)}% of trading_balance)`,
+            severity: 'block',
+            current_value: currentDeployed + proposedIncrement,
+            limit_value: envelopeCapUsd,
+          });
+        }
+      }
+    }
+
     // Calculate position size. Exits use the signal's recommended_size_usd directly
     // (full position sell), bypassing Kelly + weighter + caps since we're exiting,
     // not sizing a new entry.
@@ -107,7 +138,7 @@ export class RiskEngine {
         strategy_weight: 1.0,
       };
     } else {
-      sizing = calculatePositionSize(signal, entity, this.limits, this.strategyWeighter ?? undefined);
+      sizing = calculatePositionSize(signal, entity, this.limits, this.strategyWeighter ?? undefined, this.marketCache);
     }
 
     if (sizing.size_usd <= 0) {

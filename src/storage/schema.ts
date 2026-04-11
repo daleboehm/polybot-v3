@@ -444,6 +444,22 @@ export function applySchema(db: Database.Database): void {
     }
   }
 
+  // 2026-04-11: add uma_resolution_status column to markets table for the
+  // UMA dispute watcher (Phase 1.2). Non-empty value (anything other than "")
+  // means UMA oracle has taken some action on the market — "disputed",
+  // "proposed", "resolved", etc. The watcher polls Gamma hourly and writes
+  // the latest value; the dashboard reads it to show triage state and the
+  // alerter fires on disputes. Nullable because legacy rows don't have it.
+  try {
+    const marketCols = db.prepare(`PRAGMA table_info(markets)`).all() as Array<{ name: string }>;
+    if (!marketCols.some(c => c.name === 'uma_resolution_status')) {
+      db.exec(`ALTER TABLE markets ADD COLUMN uma_resolution_status TEXT`);
+      log.info('Added uma_resolution_status column to markets');
+    }
+  } catch (err) {
+    log.warn({ err }, 'uma_resolution_status migration failed');
+  }
+
   // Force-recreate views on every startup so edits to the DDL take effect.
   // CREATE VIEW IF NOT EXISTS is a no-op when the view already exists, so any
   // change to the SQL below would silently not apply without this drop step.

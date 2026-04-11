@@ -200,6 +200,56 @@ program
     process.exit(result.errors.length > 0 ? 1 : 0);
   });
 
+// ─── UMA-WATCH ──────────────────────────────────────────────
+// 2026-04-11: Phase 1.2 — UMA dispute watcher. Polls Gamma for every open
+// position's condition_id, records umaResolutionStatus, alerts on new
+// disputes via Telegram. Policy: hold and wait (NO-LOSE), never auto-exit.
+program
+  .command('uma-watch')
+  .description('Check UMA resolution status for every open position and alert on disputes')
+  .option('--dry-run', 'Log planned writes/alerts without touching DB or Telegram', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { runUmaDisputeWatcher } = await import('../market/uma-dispute-watcher.js');
+    const { TelegramAlerter } = await import('../metrics/alerter.js');
+    const alerter = new TelegramAlerter();
+    alerter.start();
+
+    const result = await runUmaDisputeWatcher({
+      dryRun: Boolean(opts.dryRun),
+      alerter: opts.dryRun ? undefined : alerter,
+    });
+
+    console.log('\n=== UMA Dispute Watcher Result ===');
+    console.log(`Examined:                ${result.examined}`);
+    console.log(`Updated (status changed):${result.updated}`);
+    console.log(`New disputes alerted:    ${result.new_disputes}`);
+    console.log(`Already-flagged:         ${result.already_flagged}`);
+    console.log(`Resolved since last:     ${result.resolved_since_last_check}`);
+    console.log(`Errors:                  ${result.errors.length}`);
+    if (result.disputes.length > 0) {
+      console.log('\nNew disputes:');
+      for (const d of result.disputes) {
+        console.log(`  ${d.conditionId.substring(0, 18)} — "${d.question.substring(0, 60)}"`);
+        console.log(`    ${d.oldStatus || '(empty)'} → ${d.newStatus}`);
+      }
+    }
+    if (result.errors.length > 0) {
+      console.log('\nErrors:');
+      for (const e of result.errors) {
+        console.log(`  ${e.conditionId.substring(0, 18)}: ${e.error}`);
+      }
+    }
+    console.log('');
+
+    alerter.stop();
+    closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')

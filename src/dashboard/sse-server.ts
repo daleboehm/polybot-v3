@@ -8,7 +8,7 @@ import type { Engine } from '../core/engine.js';
 import { eventBus } from '../core/event-bus.js';
 import { getEntityPnlView } from '../storage/repositories/entity-repo.js';
 import { getTradesByEntity } from '../storage/repositories/trade-repo.js';
-import { getOpenPositions } from '../storage/repositories/position-repo.js';
+import { getOpenPositions, getOpenPositionsWithMarketMeta } from '../storage/repositories/position-repo.js';
 import { getOrdersByEntity, getOpenOrders } from '../storage/repositories/order-repo.js';
 import { getResolutionsByEntity, getStrategyPerformance } from '../storage/repositories/resolution-repo.js';
 import { getSnapshots } from '../storage/repositories/snapshot-repo.js';
@@ -235,6 +235,10 @@ export class DashboardServer {
         const [, slug, resource] = entityMatch;
         switch (resource) {
           case 'positions': return this.jsonResponse(res, getOpenPositions(slug));
+          // 2026-04-11 Phase 1.6: positions pre-joined with market end_date +
+          // uma_resolution_status so the frontend can render triage states
+          // (overdue / uma_pending / dispute) without a second fetch.
+          case 'positions-with-markets': return this.jsonResponse(res, getOpenPositionsWithMarketMeta(slug));
           case 'trades':    return this.jsonResponse(res, getTradesByEntity(slug, 50));
           case 'orders':    return this.jsonResponse(res, getOrdersByEntity(slug, 50));
           case 'resolutions': return this.jsonResponse(res, getResolutionsByEntity(slug, 50));
