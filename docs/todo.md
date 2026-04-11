@@ -1,10 +1,19 @@
 # Polymarket V3 — TODO
 
-Updated: 2026-04-10 21:10 (end of deploy + stabilization session)
+Updated: 2026-04-11 (post-maker/taker + Markov + research-capture session)
 
 ## NEXT SESSION — START HERE
 
-### Top priority for next session
+### Today's verification tasks (first 15 min of next session)
+
+1. **Check maker/taker fill rates** — query `v_strategy_performance` or logs for:
+   - Count of orders where `execution_mode='maker'` that actually filled vs timed out
+   - Compare entry fill price vs market price at scan time (should average +0.01 better than before db687ca)
+   - If fill rate <50% over 24h, consider shrinking the 1-tick delta or switching specific strategies back to taker
+2. **Verify Markov longshot signals** — query recent longshot signals where `metadata.bias_multiplier != 1.0`. Confirm YES-side <20¢ signals are being sized down and NO-side signals sized up.
+3. **Check `markov-calibration.ts` didn't break anything** — look for any edge-report logs showing NaN or unexpected probabilities.
+
+### Top priority for next session (from 2026-04-10, still relevant)
 
 1. **Private GitHub repo for polybot-v3** — single source of truth across workstation / VPS src / VPS dist. Ends hot-patch drift forever. ~30-45 min setup:
    - `git init` in `Polymarket/polybot-v3/`
@@ -29,10 +38,12 @@ Updated: 2026-04-10 21:10 (end of deploy + stabilization session)
 
 ## Deploy discipline (LOCKED-IN, do not deviate)
 
+- **STANDING RULE (Dale 2026-04-11):** No patches. Only code updates. No rsync drift-plastering. No ad-hoc SQL updates. Every fix flows: workstation src edit → git commit → GitHub push → VPS git pull → `npm run build` → `systemctl restart`.
 - Workstation `Polymarket/polybot-v3/src/` is THE source of truth
-- NEVER hot-patch `/opt/polybot-v3/dist/` directly. If you must (emergency), update workstation src and scp in the SAME session.
-- Flow: edit workstation → scp to VPS src → `npm run build` on VPS → `rsync -a --delete /opt/polybot-v3/dist/ /opt/polybot-v3-rd/dist/` → `systemctl restart polybot-v3 polybot-v3-rd` → verify
-- Doc: `Polymarket/docs/deploy.md`
+- NEVER hot-patch `/opt/polybot-v3/dist/` directly. If you must (emergency), update workstation src and git commit + push in the SAME session.
+- **R&D does NOT have its own dist.** `polybot-v3-rd.service` uses `ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js` with `WorkingDirectory=/opt/polybot-v3-rd`. One rebuild = both engines updated. No rsync step needed. Verified 2026-04-11.
+- Flow: edit workstation → git commit + push → VPS `git pull` → `npm run build` → `systemctl restart polybot-v3 polybot-v3-rd` → verify
+- Doc: `polybot-v3/docs/deploy.md`
 
 ## Both engines currently LIVE (as of 2026-04-10 21:05)
 

@@ -1,6 +1,22 @@
 # Polymarket V3 — Live Status
 
-Updated: 2026-04-10 22:15 (v1/v2 cleanup + security audit pass complete)
+Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
+
+## 2026-04-11 session — 4 phases shipped
+
+All deployed to VPS (commits through `3ab1825`), prod + R&D restarted:
+
+1. **R&D dist drift cleanup** — discovered R&D was never running stale code. The `/opt/polybot-v3-rd/dist/` was orphaned artifacts; R&D's systemd `ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js` always pointed at prod's dist. Deleted the orphan dir. Verified via `/proc/<pid>/cmdline`.
+2. **Maker/taker hybrid execution** (commit `db687ca`) — entries now post as passive makers (1 tick better than market), exits remain takers. Added `execution_mode: 'maker' | 'taker'` to `Order` interface. Paper simulator enforces fill gating: maker orders only fill if book crossed us. Expected capture: 2.24pp per trade swing vs pre-fix taker pricing (Becker's 72.1M-trade study finding).
+3. **Markov empirical calibration** (commits `031d734` + `3ab1825`) — new `src/market/markov-calibration.ts` with empirical YES-resolution grid from Becker study. Longshot strategy now uses 3-step probability fallback: (1) Wilson LB from own resolved fades, (2) Markov empirical grid, (3) naive heuristic. Base size now multiplied by `longshotBiasMultiplier(price, side)` to shrink YES / grow NO in <20¢ zone.
+4. **Research-capture pipeline** — new `scripts/skills/SKILL-template.md` + `scripts/skills/capture-research.sh` wrapper. Retroactively captured Becker findings to `_Skills-staging/research-captured/skills/polymarket-markov-empirical-edges/SKILL.md` and deployed via `install-skills.sh --execute --source research-captured`. Active skill count now 1050.
+
+### Phase 5 + 6 research (no code impact)
+- **`dylanpersonguy/Polymarket-Trading-Bot`** — verified does NOT exist. Hallucinated metadata in search results.
+- **`echandsome/Polymarket-betting-bot`** — skimmed. No market-making, no inventory management. Only worthwhile artifact: `tradeMonitor.ts` receipt-parsing + WebSocket block-subscription pattern for whale tracking. Note for future whale-tracker work. **Verdict: skim complete, no deep-dive.**
+- **`evan-kolberg/prediction-market-backtesting`** — scoped. 522 stars, active daily, NautilusTrader fork with PMXT L2 historical data. Decision memo at `docs/backtesting-scoping-2026-04-11.md`. **Recommendation: Option B (Python sidecar) deferred until R2 clears.** License mixed (MIT root + LGPL adapter), subprocess boundary avoids linking obligations.
+
+## Prior state (unchanged, for reference)
 
 ## Both engines LIVE on v3 — full cleanup + hardening applied
 
