@@ -2,6 +2,88 @@
 
 Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
 
+## 2026-04-11 session — attention router + scout fleet (commits `e5d951f` → `9e3c53a`)
+
+**Four-phase build shipped in one session.** This is the big one — it
+unlocks faster reaction time (30s vs 5m) on scout-flagged markets, adds
+qualitative overlays on top of the statistical edge, and closes the
+silently-broken R&D→prod advisor feedback loop. All four phases deployed
+to prod + R&D, both engines healthy, zero errors in 6+ min uptime.
+
+### Phase 1 — Advisor fix (`e5d951f`)
+**Discovery**: the yaml was missing the `advisor:` block entirely. Schema
+default is `enabled: false`, which meant prod's StrategyAdvisor had been
+silently disabled — prod had no R&D→prod feedback loop at all. Added
+`advisor.enabled: true` + `check_interval_ms: 300000` (5 min, was 30 min
+default) + `protected_strategies: [weather_forecast, crypto_price]`.
+Advisor now fires its first check 10 seconds after startup and every
+5 minutes thereafter. Confirmed live: `Running strategy advisor check`
+logged at 19:37:22.
+
+### Phase 2 — Attention Router (`e5d951f`)
+New `market_priorities` table + `PriorityScanner` service. Scouts
+write rows saying "scan this market NOW" and the scanner polls every
+30 seconds, runs a scoped version of the scan cycle on just those
+markets, and feeds signals into the normal risk + execution pipeline.
+Out-of-cycle reaction time: 30s instead of 5m. New yaml block
+`priority_scanner:` in both engine configs.
+
+### Phase 3 — Scout Overlay (`e5d951f`)
+New `scout_intel` table + `scout-overlay.ts` module. Scouts write
+qualitative intel ("market X, side Y, conviction Z, reason ..."),
+strategies call `applyScoutOverlay()` during signal build. The overlay
+multiplies `recommended_size_usd` by:
+- **1.0 → 1.25x** on agreement, scaled by conviction
+- **1.0 → 0.50x** on disagreement, scaled by conviction
+- **1.0** (no-op) on neutral intel or low conviction (<0.60)
+
+Integrated into favorites (4 subs), longshot (3 subs), convergence
+(2 subs). Overlay cannot CREATE signals — only weights existing ones.
+Risk engine caps remain the final gate. Layered multiplicatively with
+the Becker longshot-bias multiplier in longshot strategies.
+
+### Phase 4 — Scout Fleet (`9e3c53a`)
+Four in-process scouts run on a 60-second shared timer inside the
+engine process (not separate systemd services). Shared market cache
+access = no DB round trips; sliding-window state lives in scout memory.
+
+1. **VolumeSpikeScout** — flags markets with ≥3x volume growth in a
+   5-min window. Priority 6-10 by magnitude. Noise floor: $5K volume.
+2. **PriceJumpScout** — flags markets with ≥5% mid-price moves in
+   5 min. Priority 6-10 by magnitude. Min liquidity $1K.
+3. **NewListingScout** — flags newly-appeared markets with ≥$500
+   liquidity. Seeded 1045 markets on first tick (confirmed in logs).
+   Priority 7, 15-min TTL.
+4. **LlmNewsScout** — stub that fails closed without `ANTHROPIC_API_KEY`.
+   When key lands, un-stub `callClaude()` in `src/scouts/llm-news-scout.ts`
+   and add `@anthropic-ai/sdk` dependency. Writes both scout_intel
+   (side + conviction capped at 0.80) and market_priorities rows.
+
+All scouts registered via `ScoutCoordinator.start()`. Config block
+`scouts:` in both yamls, `disabled_scouts` array for turning individual
+scouts off without code changes.
+
+### Verification
+- Typecheck clean (3 rounds, minor import fixes needed on round 1)
+- Build clean
+- Both engines restarted cleanly at 19:43:02 / 19:42:59
+- All 4 scouts registered in coordinator logs on both engines
+- PriorityScanner running on both engines
+- Advisor enabled on prod
+- LLM news scout correctly reports dormant with ANTHROPIC_API_KEY missing
+- NewListingScout seeded 1045 markets on its first tick (R&D, 19:44:00)
+- Zero errors in 6+ min of runtime across both engines
+
+### Open items
+- **ANTHROPIC_API_KEY provisioning** — Dale needs to add this to
+  `/opt/polybot-v3/.env` and `/opt/polybot-v3-rd/.env` on the VPS to
+  activate the LLM news scout. Un-stub `callClaude()` in the scout.
+- **Scout flagging verification** — scouts log silently when they
+  find nothing (by design). Real flagging events will appear in logs
+  the first time an actual volume spike / price jump occurs. Monitor
+  over next 24h: `journalctl -u polybot-v3-rd --since '1 hour ago' |
+  grep -iE 'spike|jump|flagged'`.
+
 ## 2026-04-11 session — prod parity patch (commit `0249404`)
 
 **Ensured prod has all the calibration brains it needs.** Wired the Markov

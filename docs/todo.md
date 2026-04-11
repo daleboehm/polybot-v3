@@ -1,10 +1,24 @@
 # Polymarket V3 — TODO
 
-Updated: 2026-04-11 (post-maker/taker + Markov + research-capture session)
+Updated: 2026-04-11 (attention router + scout fleet shipped)
 
 ## NEXT SESSION — START HERE
 
 ### Today's verification tasks (first 15 min of next session)
+
+0. **Scout fleet signal review** — the big new thing. After 24h+ of runtime check:
+   - `journalctl -u polybot-v3-rd --since '1 hour ago' | grep -iE 'spike|jump|flagged|Scout tick'` — confirm scouts are firing real findings
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*), MAX(priority), MIN(created_at), MAX(created_at) FROM market_priorities GROUP BY created_by;'` — priority rows per scout
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*) FROM scout_intel GROUP BY created_by;'` — qualitative intel rows
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT COUNT(*) FROM signals WHERE metadata LIKE "%scout_overlay%" AND json_extract(metadata, "$.scout_overlay_multiplier") != 1.0;'` — signals where overlay actually shifted size
+   - `journalctl -u polybot-v3-rd --since '1 hour ago' | grep -iE 'Priority scan complete'` — how often the priority scanner fired
+   - **If zero scout activity after 24h**: probably a market-data / marketCache issue. Check `sampling-poller` logs for volume_24h refresh errors.
+
+0b. **Verify advisor fired on prod** — the yaml fix re-enabled the advisor. Check:
+   - `journalctl -u polybot-v3 --since '1 hour ago' | grep -iE 'strategy advisor'` — should see periodic 5-min checks
+   - Verify `convergence.long_term_grind` got disabled (it was producing −97pp avg edge per prior session notes)
+
+0c. **Activate LlmNewsScout** — requires `ANTHROPIC_API_KEY` on the VPS and un-stubbing `callClaude()` in `src/scouts/llm-news-scout.ts`. Takes ~1-2 hours once key is available. Add `@anthropic-ai/sdk` to package.json.
 
 1. **Check maker/taker fill rates** — query `v_strategy_performance` or logs for:
    - Count of orders where `execution_mode='maker'` that actually filled vs timed out
