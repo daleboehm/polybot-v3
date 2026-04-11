@@ -58,3 +58,13 @@ dashboard:
 
 database:
   path: /opt/polybot-v3-rd/data/rd.db
+
+# Attention Router (same defaults as prod, see config/default.yaml). R&D
+# already scans every 2 min so this is slightly less impactful but still
+# useful when scouts flag a fast-moving market mid-cycle.
+priority_scanner:
+  enabled: true
+  interval_ms: 30000
+  max_priorities_per_run: 25
+  min_scan_gap_ms: 60000
+  gc_every_n_runs: 60

@@ -10,6 +10,7 @@ import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
 import { calibratedSideProb } from '../../market/markov-calibration.js';
+import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -141,6 +142,8 @@ export class FavoritesStrategy extends BaseStrategy {
           ? underdogMarkovProb
           : underdogPrice + 0.05;
         const underdogEdge = underdogModelProb - underdogPrice;
+        const fanFadeOverlay = applyScoutOverlay(market.condition_id, underdogSide);
+        const fanFadeSize = Math.max(1, 3 * fanFadeOverlay.multiplier);
         const key = `fan_fade:${market.condition_id}`;
         if (!this.recentTrades.has(key)) {
           signals.push({
@@ -156,13 +159,16 @@ export class FavoritesStrategy extends BaseStrategy {
             edge: underdogEdge,
             model_prob: underdogModelProb,
             market_price: underdogPrice,
-            recommended_size_usd: 3,
+            recommended_size_usd: fanFadeSize,
             metadata: {
               question: market.question,
               sub_strategy: 'fan_fade',
               hours_to_resolve: hoursToResolve,
               hyped_favorite_price: favoritePrice,
               using_markov_calibration: Number.isFinite(underdogMarkovProb),
+              scout_overlay_multiplier: fanFadeOverlay.multiplier,
+              scout_overlay_reason: fanFadeOverlay.reason,
+              scout_overlay_scout_id: fanFadeOverlay.scoutId,
             },
             created_at: new Date(),
           });
@@ -206,6 +212,15 @@ export class FavoritesStrategy extends BaseStrategy {
     // which should be ~never in practice.
     const clampedModelProb = Math.min(0.99, modelProb);
     const edge = usingCalibration ? (clampedModelProb - price) : (payoff * 0.5);
+
+    // Phase 3 (2026-04-11): scout overlay. If any scout has recently
+    // written qualitative intel for this market, the overlay returns a
+    // size multiplier (1.0 = no-op, up to 1.25x on agreement, down to
+    // 0.5x on disagreement). The strategy's edge / calibration math is
+    // unchanged — only recommended_size_usd gets the adjustment.
+    const overlay = applyScoutOverlay(market.condition_id, side);
+    const baseSize = 10;
+    const adjustedSize = Math.max(1, baseSize * overlay.multiplier);
     return {
       signal_id: nanoid(),
       entity_slug: ctx.entity.config.slug,
@@ -219,8 +234,11 @@ export class FavoritesStrategy extends BaseStrategy {
       edge,
       model_prob: clampedModelProb,
       market_price: price,
-      recommended_size_usd: 10,
+      recommended_size_usd: adjustedSize,
       metadata: {
+        scout_overlay_multiplier: overlay.multiplier,
+        scout_overlay_reason: overlay.reason,
+        scout_overlay_scout_id: overlay.scoutId,
         question: market.question,
         market_slug: market.market_slug,
         hours_to_resolve: Math.round(hoursToResolve * 10) / 10,

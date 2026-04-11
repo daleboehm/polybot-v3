@@ -10,6 +10,7 @@ import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
 import { calibratedYesProb, longshotBiasMultiplier } from '../../market/markov-calibration.js';
+import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -170,8 +171,15 @@ export class LongshotStrategy extends BaseStrategy {
     // For fade strategies we're buying the FADE side (the expensive side), so
     // the multiplier is evaluated at fadePrice with fadeSide.
     const biasMultiplier = longshotBiasMultiplier(fadePrice, fadeSide);
+    // Phase 3 (2026-04-11): scout overlay. Layered on TOP of the Markov
+    // longshot bias multiplier. The bias multiplier is Becker's industry
+    // statistical adjustment; the overlay is the scout's qualitative view.
+    // Both compose linearly — so a 1.2x Markov boost × 1.25x scout boost
+    // gives a final multiplier of 1.5x, bounded by the risk engine's caps.
+    const overlay = applyScoutOverlay(m.condition_id, fadeSide);
     const baseSize = 5;
-    const biasedSize = Math.round(baseSize * biasMultiplier * 100) / 100;
+    const combinedMultiplier = biasMultiplier * overlay.multiplier;
+    const biasedSize = Math.max(1, Math.round(baseSize * combinedMultiplier * 100) / 100);
     return {
       signal_id: nanoid(),
       entity_slug: ctx.entity.config.slug,
@@ -192,6 +200,9 @@ export class LongshotStrategy extends BaseStrategy {
         sub_strategy: subStrategyId,
         using_calibration: usingCalibration,
         bias_multiplier: biasMultiplier,
+        scout_overlay_multiplier: overlay.multiplier,
+        scout_overlay_reason: overlay.reason,
+        scout_overlay_scout_id: overlay.scoutId,
       },
       created_at: new Date(),
     };

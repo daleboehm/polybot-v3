@@ -80,3 +80,39 @@ dashboard:
 
 database:
   path: ./data/polybot.db
+
+# R&D → Prod strategy sync. The advisor reads R&D's rd.db read-only on a timer
+# and auto-enables/disables sub-strategies on prod based on Wilson LB gating
+# over R&D's resolved positions. Before 2026-04-11 this section was missing
+# from the yaml which meant the schema default `enabled: false` silently
+# disabled the feedback loop entirely — prod had no way to learn from R&D.
+#
+# Check interval set to 5 min to match the scan cycle. This way R&D's most
+# recent resolutions propagate to prod before prod's next scan fires.
+advisor:
+  enabled: true
+  rd_database_path: /opt/polybot-v3-rd/data/rd.db
+  check_interval_ms: 300000         # 5 minutes (was 30 min default)
+  target_entity_slug: polybot
+  # Never auto-disable these even if Wilson gate fires — they have real data
+  # feeds (Open-Meteo, Binance) and low resolution counts from the R&D sample.
+  protected_strategies:
+    - weather_forecast
+    - crypto_price
+  thresholds:
+    min_resolutions_to_enable: 10
+    min_win_rate_to_enable: 50
+    min_pnl_to_enable: 0
+    min_resolutions_to_disable: 20
+    max_win_rate_to_disable: 30
+
+# Attention Router — scouts write high-priority markets to market_priorities
+# and this scanner fires strategies on them every 30 seconds out of the
+# normal scan cycle. Harmless to leave enabled on engines where no scouts
+# are running (finds an empty table, does nothing).
+priority_scanner:
+  enabled: true
+  interval_ms: 30000              # 30 seconds
+  max_priorities_per_run: 25
+  min_scan_gap_ms: 60000          # don't re-scan the same priority row more than 1x/min
+  gc_every_n_runs: 60             # GC expired priority + intel rows every ~30 min

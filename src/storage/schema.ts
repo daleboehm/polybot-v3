@@ -294,6 +294,70 @@ CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_slug);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 
+-- ─── MARKET PRIORITIES (Attention Router — Phase 2, 2026-04-11) ──────
+-- Scouts write rows here to tell the engine "scan this market now, don't
+-- wait for the next 5-minute scan cycle." The PriorityScanner runs every
+-- 30 seconds, reads active (expires_at > now) priorities, and fires
+-- strategies on just those markets out of the normal cycle. Signals
+-- flow through the normal risk + execution pipeline.
+--
+-- Priority: 1 (lowest) to 10 (highest). Scout's confidence + urgency.
+-- Reason: short text, scout writes why (e.g. "volume spike 8x baseline").
+-- Created_by: scout_id of the scout that wrote the row. Used for dashboards
+-- and to debug which scouts are producing useful priorities.
+-- Expires_at: unix ms. Scouts set short windows (5-30 min) so stale
+-- priorities clean themselves up.
+-- Scanned_count: how many times the PriorityScanner has evaluated this
+-- row since insert. Used to rate-limit repeat scans of the same market.
+CREATE TABLE IF NOT EXISTS market_priorities (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id    TEXT    NOT NULL,
+    priority        INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 10),
+    reason          TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    scanned_count   INTEGER NOT NULL DEFAULT 0,
+    last_scanned_at INTEGER,
+    FOREIGN KEY (condition_id) REFERENCES markets(condition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_active ON market_priorities(expires_at) WHERE expires_at > 0;
+CREATE INDEX IF NOT EXISTS idx_mp_condition ON market_priorities(condition_id);
+CREATE INDEX IF NOT EXISTS idx_mp_scout ON market_priorities(created_by);
+
+-- ─── SCOUT INTEL (Scout Overlay — Phase 3, 2026-04-11) ──────────────
+-- Scouts write *qualitative* intel here: "market X, side NO, conviction
+-- 0.7, reason: CDC just announced". Strategies read this during signal
+-- build via scout-overlay.ts and apply a size multiplier:
+--   agree + high conviction → 1.25x
+--   disagree + high conviction → 0.5x (or skip)
+--   no intel → 1.0x
+-- Intel cannot CREATE signals — it only weights existing ones. The
+-- strategy math + calibration is always primary.
+--
+-- Side: 'YES' | 'NO' — which side the scout thinks should resolve.
+-- Conviction: 0-1, how confident the scout is. 0.5 = neutral, 1.0 = high.
+-- Reason: free text, scout explains in plain language.
+-- Expires_at: default 24h from created_at. Scouts can set shorter for
+-- time-sensitive news, longer for structural observations.
+CREATE TABLE IF NOT EXISTS scout_intel (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id    TEXT    NOT NULL,
+    side            TEXT    NOT NULL CHECK(side IN ('YES', 'NO')),
+    conviction      REAL    NOT NULL CHECK(conviction BETWEEN 0 AND 1),
+    reason          TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    used_count      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (condition_id) REFERENCES markets(condition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_si_active ON scout_intel(expires_at);
+CREATE INDEX IF NOT EXISTS idx_si_condition ON scout_intel(condition_id);
+CREATE INDEX IF NOT EXISTS idx_si_scout ON scout_intel(created_by);
+
 -- ─── VIEWS ──────────────────────────────────────────────────
 
 CREATE VIEW IF NOT EXISTS v_entity_pnl AS
@@ -473,6 +537,25 @@ export function applySchema(db: Database.Database): void {
     }
   } catch (err) {
     log.warn({ err }, 'peak_pnl_pct migration failed');
+  }
+
+  // 2026-04-11 Phase 2 (Attention Router) + Phase 3 (Scout Overlay):
+  // ensure market_priorities and scout_intel tables exist on DBs that were
+  // created before these tables were in the DDL. The CREATE TABLE IF NOT
+  // EXISTS statements above run on every startup and are idempotent, but
+  // we explicitly verify the tables exist here to surface any migration
+  // failure in the logs rather than silently continuing.
+  try {
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('market_priorities','scout_intel')`).all() as Array<{ name: string }>;
+    const names = new Set(tables.map(t => t.name));
+    if (!names.has('market_priorities')) {
+      log.warn('market_priorities table missing after DDL apply — this should not happen');
+    }
+    if (!names.has('scout_intel')) {
+      log.warn('scout_intel table missing after DDL apply — this should not happen');
+    }
+  } catch (err) {
+    log.warn({ err }, 'priority/intel table verification failed');
   }
 
   // Force-recreate views on every startup so edits to the DDL take effect.

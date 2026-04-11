@@ -19,6 +19,7 @@ import { OnChainReconciler } from '../market/on-chain-reconciler.js';
 import { PortfolioRiskTracker } from '../risk/portfolio-risk.js';
 import { RegimeDetector } from '../market/regime-detector.js';
 import { TelegramAlerter } from '../metrics/alerter.js';
+import { PriorityScanner } from './priority-scanner.js';
 import { metricsRegistry } from '../metrics/metrics.js';
 import type { Hex } from 'viem';
 import { buildOrder } from '../execution/order-builder.js';
@@ -74,6 +75,8 @@ export class Engine {
   private portfolioRisk: PortfolioRiskTracker;
   private regimeDetector: RegimeDetector;
   private alerter: TelegramAlerter;
+  // Phase 2 (2026-04-11): attention router for scout-flagged markets
+  private priorityScanner: PriorityScanner | null = null;
 
   private scanInterval: ReturnType<typeof setInterval> | null = null;
   private riskCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -325,6 +328,35 @@ export class Engine {
       log.info({ interval_ms: this.config.advisor.check_interval_ms, target: this.config.advisor.target_entity_slug }, 'Strategy advisor enabled');
     }
 
+    // Phase 2 (2026-04-11): start the attention router. Runs every ~30s,
+    // polls market_priorities for scout-flagged markets, and fires
+    // strategies on them out-of-cycle. Signals flow through the normal
+    // risk engine + router pipeline.
+    if (this.config.priority_scanner.enabled) {
+      this.priorityScanner = new PriorityScanner(
+        {
+          entityManager: this.entityManager,
+          strategyRegistry: this.strategyRegistry,
+          marketCache: this.marketCache,
+          riskEngine: this.riskEngine,
+          clobRouter: this.clobRouter,
+          riskLimits: this.config.risk,
+          executionConfig: {
+            slippage_bps: this.config.execution.slippage_bps,
+            bid_premium_pct: this.config.execution.bid_premium_pct,
+          },
+        },
+        {
+          enabled: this.config.priority_scanner.enabled,
+          interval_ms: this.config.priority_scanner.interval_ms,
+          max_priorities_per_run: this.config.priority_scanner.max_priorities_per_run,
+          min_scan_gap_ms: this.config.priority_scanner.min_scan_gap_ms,
+          gc_every_n_runs: this.config.priority_scanner.gc_every_n_runs,
+        },
+      );
+      this.priorityScanner.start();
+    }
+
     // R3b: start Telegram alerter (subscribes to event bus for kill-switch + engine events)
     this.alerter.start();
 
@@ -348,6 +380,7 @@ export class Engine {
     if (this.riskCheckInterval) clearInterval(this.riskCheckInterval);
     if (this.snapshotInterval) clearInterval(this.snapshotInterval);
     if (this.advisorInterval) clearInterval(this.advisorInterval);
+    if (this.priorityScanner) this.priorityScanner.stop();
     this.alerter.stop();
 
     this.samplingPoller.stop();

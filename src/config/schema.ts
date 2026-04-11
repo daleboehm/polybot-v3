@@ -103,6 +103,19 @@ const advisorConfigSchema = z.object({
   thresholds: advisorThresholdsSchema.default({}),
 });
 
+// Phase 2 (2026-04-11): attention router. Runs a small out-of-cycle scan
+// every N seconds on markets that scouts have flagged as high-priority
+// via the market_priorities table. Defaults keep it enabled with a 30s
+// cadence — on engines where the scouts are not running, the scanner
+// finds an empty priority table and does nothing, which is harmless.
+const priorityScannerConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  interval_ms: z.number().positive().default(30_000),
+  max_priorities_per_run: z.number().int().positive().default(25),
+  min_scan_gap_ms: z.number().int().nonnegative().default(60_000),
+  gc_every_n_runs: z.number().int().positive().default(60),
+});
+
 export const defaultConfigSchema = z.object({
   engine: engineConfigSchema,
   risk: riskLimitsSchema,
@@ -111,6 +124,7 @@ export const defaultConfigSchema = z.object({
   dashboard: dashboardConfigSchema,
   database: databaseConfigSchema,
   advisor: advisorConfigSchema.default({}),
+  priority_scanner: priorityScannerConfigSchema.default({}),
 });
 
 const entityStrategyConfigSchema = z.object({

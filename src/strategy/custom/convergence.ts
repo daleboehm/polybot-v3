@@ -10,6 +10,7 @@ import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
 import { calibratedSideProb } from '../../market/markov-calibration.js';
+import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -90,6 +91,8 @@ export class ConvergenceStrategy extends BaseStrategy {
       ) {
         const key = `filtered_high_prob:${m.condition_id}`;
         if (!this.recent.has(key)) {
+          const overlay = applyScoutOverlay(m.condition_id, cs);
+          const sizedUsd = Math.max(1, 10 * overlay.multiplier);
           signals.push({
             signal_id: nanoid(),
             entity_slug: ctx.entity.config.slug,
@@ -103,7 +106,7 @@ export class ConvergenceStrategy extends BaseStrategy {
             edge: fhpEdge,
             model_prob: fhpModelProb,
             market_price: cp,
-            recommended_size_usd: 10,
+            recommended_size_usd: sizedUsd,
             metadata: {
               question: m.question,
               sub_strategy: 'filtered_high_prob',
@@ -112,6 +115,9 @@ export class ConvergenceStrategy extends BaseStrategy {
               using_calibration: usingCalibrationFhp,
               using_own_calibration: usingOwnFhp,
               using_markov_calibration: usingMarkovFhp,
+              scout_overlay_multiplier: overlay.multiplier,
+              scout_overlay_reason: overlay.reason,
+              scout_overlay_scout_id: overlay.scoutId,
             },
             created_at: new Date(),
           });
@@ -160,6 +166,8 @@ export class ConvergenceStrategy extends BaseStrategy {
         const ltgEdge = ltgModelProb - cp;
         const key = `long_term_grind:${m.condition_id}`;
         if (!this.recent.has(key)) {
+          const ltgOverlay = applyScoutOverlay(m.condition_id, cs);
+          const ltgSizedUsd = Math.max(1, 20 * ltgOverlay.multiplier);
           signals.push({
             signal_id: nanoid(),
             entity_slug: ctx.entity.config.slug,
@@ -173,7 +181,7 @@ export class ConvergenceStrategy extends BaseStrategy {
             edge: ltgEdge,
             model_prob: ltgModelProb,
             market_price: cp,
-            recommended_size_usd: 20,
+            recommended_size_usd: ltgSizedUsd,
             metadata: {
               question: m.question,
               sub_strategy: 'long_term_grind',
@@ -181,6 +189,9 @@ export class ConvergenceStrategy extends BaseStrategy {
               profit: 1 - cp,
               using_own_calibration: usingOwnLtg,
               using_markov_calibration: usingMarkovLtg,
+              scout_overlay_multiplier: ltgOverlay.multiplier,
+              scout_overlay_reason: ltgOverlay.reason,
+              scout_overlay_scout_id: ltgOverlay.scoutId,
             },
             created_at: new Date(),
           });
