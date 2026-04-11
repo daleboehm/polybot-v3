@@ -62,6 +62,10 @@ export interface MarketData {
   taker_fee: number;
   minimum_order_size: number;
   minimum_tick_size: number;
+  // Phase A3 (2026-04-11): tags from the Polymarket metadata. Used by the
+  // wash-trading penalty to detect high-risk categories (sports/election).
+  // Sourced from SamplingMarket.tags in the sampling-poller.
+  tags: string[];
   last_updated: Date;
 }
 
