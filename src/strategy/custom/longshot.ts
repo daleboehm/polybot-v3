@@ -9,6 +9,7 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
+import { calibratedYesProb, longshotBiasMultiplier } from '../../market/markov-calibration.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -64,14 +65,22 @@ export class LongshotStrategy extends BaseStrategy {
       // Skip if fade side is too expensive (not enough room for profit)
       if (fadePrice > 0.98) continue;
 
-      // R2 PR#1 base-rate calibration: prefer empirical Wilson LB from resolved
-      // fade positions in this fade-price bucket. Falls back to the old
-      // `impliedProb + 0.04` heuristic when insufficient history.
-      const calibratedProb = baseRateCalibrator.getBaseRate(this.id, fadePrice);
-      const usingCalibration = calibratedProb !== null;
-      const expectedEdge = 0.04; // ~4% statistical edge from fading longshot bias (fallback)
+      // R2 PR#1 + Phase 3 (2026-04-11) base-rate calibration:
+      // Order of precedence:
+      //   1. Wilson LB from our own resolved fade positions (best — calibrated
+      //      to OUR strategy performance)
+      //   2. Markov empirical lookup from Becker's 72.1M-trade study (better
+      //      than a blanket 4% heuristic — captures the real longshot bias
+      //      curve at different price levels)
+      //   3. Naive `impliedProb + 0.04` (last resort, kept for safety)
+      const ownCalibration = baseRateCalibrator.getBaseRate(this.id, fadePrice);
+      // For fade strategies we want the probability of the FADE side (expensive)
+      // resolving YES. calibratedYesProb(fadePrice) gives us that directly.
+      const markovCalibration = calibratedYesProb(fadePrice);
+      const usingCalibration = ownCalibration !== null;
+      const expectedEdge = 0.04; // legacy heuristic fallback if Markov also unavailable
       const impliedProb = fadePrice;
-      const modelProb = calibratedProb ?? Math.min(0.99, impliedProb + expectedEdge);
+      const modelProb = ownCalibration ?? markovCalibration ?? Math.min(0.99, impliedProb + expectedEdge);
 
       // Precedence check: if any higher-priority sub already fired on this market
       // this cycle, skip the lower-priority subs. Priority (highest first):
@@ -154,6 +163,13 @@ export class LongshotStrategy extends BaseStrategy {
     // Real edge = calibrated prob - market price. Fallback uses the heuristic
     // edge constant when calibration has insufficient data.
     const edge = usingCalibration ? (clampedModelProb - fadePrice) : fallbackEdge;
+    // Phase 3 (2026-04-11): apply the Markov/Becker longshot-bias multiplier
+    // to the base size. Shrinks YES exposure on deep tails, grows NO exposure.
+    // For fade strategies we're buying the FADE side (the expensive side), so
+    // the multiplier is evaluated at fadePrice with fadeSide.
+    const biasMultiplier = longshotBiasMultiplier(fadePrice, fadeSide);
+    const baseSize = 5;
+    const biasedSize = Math.round(baseSize * biasMultiplier * 100) / 100;
     return {
       signal_id: nanoid(),
       entity_slug: ctx.entity.config.slug,
@@ -167,12 +183,13 @@ export class LongshotStrategy extends BaseStrategy {
       edge,
       model_prob: clampedModelProb,
       market_price: fadePrice,
-      recommended_size_usd: 5,
+      recommended_size_usd: biasedSize,
       metadata: {
         question: m.question,
         tail_price: tailPrice,
         sub_strategy: subStrategyId,
         using_calibration: usingCalibration,
+        bias_multiplier: biasMultiplier,
       },
       created_at: new Date(),
     };
