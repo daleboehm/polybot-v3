@@ -99,25 +99,48 @@ export class RiskEngine {
       });
     }
 
-    // 2026-04-11 Phase 1.5: per-strategy capital envelope.
-    // Each strategy_id can tie up at most max_strategy_envelope_pct of
-    // trading_balance. Blocks new entries from a strategy that's already
-    // at its cap. Exits bypass (reducing a position is always allowed).
-    // Set max_strategy_envelope_pct to 0 to disable the check.
+    // 2026-04-11 Phase 1.5 + fix: per-strategy capital envelope.
+    //
+    // Denominator is EQUITY (cash + open_positions_value), not trading_balance.
+    // The first pass of this check used trading_balance (== cash after Dale's
+    // reserve removal) as the denominator, which collapsed the envelope cap
+    // to near-zero once cash was fully deployed: a strategy with $50 already
+    // in positions got checked against 25% of $12 current cash = $3 cap,
+    // rejecting every new entry even though the entity had $160 equity.
+    //
+    // Fix: compute equity as cash + sum(open_positions.cost_basis), then
+    // cap each strategy at envelope_pct of equity. This matches the
+    // intuition — "no strategy should tie up more than 25% of the TOTAL
+    // bankroll" — regardless of how much is currently sitting as cash vs
+    // as open positions.
+    //
+    // Lookup getOpenPositions once and reuse for both envelope + cluster
+    // checks below (same data).
+    let openPositionsCache: ReturnType<typeof getOpenPositions> | null = null;
+    const getOpenCached = () => {
+      if (openPositionsCache === null) {
+        openPositionsCache = getOpenPositions(entity.config.slug);
+      }
+      return openPositionsCache;
+    };
+    const computeEquity = (): number => {
+      const cash = entity.trading_balance || 0;
+      const deployed = getOpenCached().reduce((s, p) => s + (p.cost_basis || 0), 0);
+      return cash + deployed;
+    };
+
     const envelopePct = this.limits.max_strategy_envelope_pct ?? 0.25;
     if (!isExit && envelopePct > 0 && signal.strategy_id) {
-      const envelopeCapUsd = entity.trading_balance * envelopePct;
+      const equity = computeEquity();
+      const envelopeCapUsd = equity * envelopePct;
       if (envelopeCapUsd > 0) {
         const deployedByStrategy = getDeployedByStrategy(entity.config.slug);
         const currentDeployed = deployedByStrategy[signal.strategy_id] ?? 0;
-        // Use the recommended signal size as a proxy for the incoming trade;
-        // the actual sized USD isn't computed yet at this point in evaluate().
-        // This is conservative: the real fill may be smaller due to caps.
         const proposedIncrement = signal.recommended_size_usd ?? 0;
         if (currentDeployed + proposedIncrement > envelopeCapUsd) {
           violations.push({
             rule: 'strategy_envelope',
-            message: `strategy ${signal.strategy_id} deployed $${currentDeployed.toFixed(2)} + proposed $${proposedIncrement.toFixed(2)} > envelope cap $${envelopeCapUsd.toFixed(2)} (${(envelopePct * 100).toFixed(0)}% of trading_balance)`,
+            message: `strategy ${signal.strategy_id} deployed $${currentDeployed.toFixed(2)} + proposed $${proposedIncrement.toFixed(2)} > envelope cap $${envelopeCapUsd.toFixed(2)} (${(envelopePct * 100).toFixed(0)}% of equity $${equity.toFixed(2)})`,
             severity: 'block',
             current_value: currentDeployed + proposedIncrement,
             limit_value: envelopeCapUsd,
@@ -126,33 +149,30 @@ export class RiskEngine {
       }
     }
 
-    // 2026-04-11 Phase 2.2: correlated-cluster cap.
-    // Groups open positions into clusters (neg_risk_market_id + keyword
-    // matching on question text) and caps the total cost per cluster at
-    // max_cluster_pct of trading_balance. Catches "10 positions on Hungary
-    // elections = 1 bet" concentrations. Exits bypass.
-    //
-    // Signal doesn't carry market_question directly; look it up from the
-    // market cache by condition_id. If cache miss, fall back to empty
-    // string which means the scan falls back to `cid:<condition_id>` for
-    // its own cluster — no breach possible on first-sight.
+    // 2026-04-11 Phase 2.2 + fix: correlated-cluster cap.
+    // Same denominator change as above — use equity, not trading_balance.
+    // Without the fix, every existing cluster (including __orphan with the
+    // 4 political positions) was over its cap as soon as cash was deployed,
+    // permanently blocking new entries into any cluster that already had
+    // any position.
     const clusterPct = this.limits.max_cluster_pct ?? 0.15;
     if (!isExit && clusterPct > 0) {
-      const openPositions = getOpenPositions(entity.config.slug);
+      const openPositions = getOpenCached();
       const marketMeta = this.marketCache?.get(signal.condition_id);
       const marketQuestion = marketMeta?.question ?? '';
+      const equity = computeEquity();
       const clusterCheck = checkClusterCap(
         marketQuestion,
         signal.condition_id,
         signal.recommended_size_usd ?? 0,
-        entity.trading_balance,
+        equity,
         clusterPct,
         openPositions,
       );
       if (clusterCheck.breach) {
         violations.push({
           rule: 'cluster_cap',
-          message: `cluster ${clusterCheck.cluster_id} deployed $${clusterCheck.current_deployed.toFixed(2)} + proposed $${(signal.recommended_size_usd ?? 0).toFixed(2)} > cap $${clusterCheck.cap_usd.toFixed(2)} (${(clusterPct * 100).toFixed(0)}% of trading_balance)`,
+          message: `cluster ${clusterCheck.cluster_id} deployed $${clusterCheck.current_deployed.toFixed(2)} + proposed $${(signal.recommended_size_usd ?? 0).toFixed(2)} > cap $${clusterCheck.cap_usd.toFixed(2)} (${(clusterPct * 100).toFixed(0)}% of equity $${equity.toFixed(2)})`,
           severity: 'block',
           current_value: clusterCheck.proposed_total,
           limit_value: clusterCheck.cap_usd,
