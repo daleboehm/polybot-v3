@@ -7,17 +7,37 @@ engine:
   log_level: info
 
 risk:
-  max_position_pct: 0.10          # 10% of trading balance
-  max_position_usd: 20.00
-  fractional_kelly: 0.25
-  daily_loss_lockout_usd: 20.00
-  stop_loss_pct: 0.20             # -20%
-  hard_stop_usd: 5.00
-  profit_target_pct: 0.40         # +40%
+  # ═══════════════════════════════════════════════════════════════════
+  # SPRINT MODE (2026-04-11, Dale's directive):
+  # Bankroll is $257, debt-pressured, running a sprint to flush the
+  # account so it can fund other entities for debt repayment. Marathon-
+  # era risk caps (envelope, cluster) are DISABLED here — they were
+  # preventing the engine from compounding its best strategies. The
+  # NO-LOSE mantra (hold to resolution, never force-exit) is still in
+  # effect, so "over-concentration" has no real downside in this phase.
+  #
+  # Re-enable these when bankroll > ~$5K and you want drawdown
+  # discipline more than compounding speed:
+  #   max_strategy_envelope_pct: 0.25
+  #   max_cluster_pct: 0.15
+  # ═══════════════════════════════════════════════════════════════════
+  max_position_pct: 0.25          # 25% of equity per position (was 10% marathon)
+  max_position_usd: 40.00         # absolute per-position cap (was 20 marathon)
+  fractional_kelly: 0.50          # half-Kelly for faster compounding (was 0.25)
+  daily_loss_lockout_usd: 20.00   # still active — single-day catastrophic floor
+  stop_loss_pct: 0.20             # still configured; NO-LOSE policy never stops
+  hard_stop_usd: 5.00             # per-position catastrophic floor
+  profit_target_pct: 0.40
+  # Sprint mode: no per-strategy and no per-cluster caps
+  max_strategy_envelope_pct: 0.0  # DISABLED for sprint
+  max_cluster_pct: 0.0            # DISABLED for sprint
+  # Trailing profit lock still active — captures more on runners
+  trailing_activation_pct: 0.20
+  trailing_retention_pct: 0.70
   # 2026-04-10: reserve_ratio / trading_ratio / max_positions removed from schema.
   # Dale's directive: "only limit is cash, no reserve." Trading balance == cash.
   # When reserves come back, it'll be via the central-node sweep pattern.
-  min_edge_threshold: 0.02        # 2% minimum edge
+  min_edge_threshold: 0.015       # 1.5% minimum edge (was 0.02 marathon)
   min_hold_hours: 6
   # Dale 2026-04-10: prod must NOT buy anything that resolves past 48 hours.
   # "I need to keep the capital moving." Enforced by strategy-context.ts
