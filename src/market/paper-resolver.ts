@@ -29,11 +29,13 @@
 
 import { getAllOpenPositions, closePosition } from '../storage/repositories/position-repo.js';
 import { insertResolution } from '../storage/repositories/resolution-repo.js';
+import { insertTrade } from '../storage/repositories/trade-repo.js';
 import type { EntityManager } from '../entity/entity-manager.js';
 import type { DailyLossGuard } from '../risk/daily-loss-guard.js';
-import type { Outcome } from '../types/index.js';
+import type { Outcome, OrderFill } from '../types/index.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
+import { nanoid } from 'nanoid';
 
 const log = createChildLogger('paper-resolver');
 
@@ -149,6 +151,41 @@ export class PaperResolver {
           : ('YES' as Outcome);
 
       try {
+        // 2026-04-10: synthetic SELL trade row for audit-trail completeness.
+        // Paper-resolver knows the verified outcome from CLOB (didWin flag +
+        // computed payout), so the synthetic SELL is honest: net_usdc = payout
+        // which is either size (win, 1 USDC/share redemption) or 0 (loss, no
+        // payout). Without this, paper-resolver's cash-credit path for wins
+        // leaves a hole in the audit trail where `SUM(SELL) + starting - SUM(BUY)
+        // ≠ current_cash`.
+        //
+        // Ordered before insertResolution/closePosition so a failure aborts the
+        // whole resolution cleanly.
+        const sellPriceSynth = pos.size > 0 ? payout / pos.size : 0;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const syntheticFill: OrderFill = {
+          trade_id: `synth-${nanoid(12)}`,
+          order_id: `synth-${nanoid(12)}`,
+          entity_slug: pos.entity_slug,
+          condition_id: pos.condition_id,
+          token_id: pos.token_id,
+          tx_hash: null,
+          side: 'SELL',
+          size: pos.size,
+          price: sellPriceSynth,
+          usdc_size: payout,
+          fee_usdc: 0,
+          net_usdc: payout,
+          is_paper: true,
+          strategy_id: pos.strategy_id ?? '',
+          sub_strategy_id: pos.sub_strategy_id ?? undefined,
+          outcome: pos.side as Outcome,
+          market_question: pos.market_question ?? '',
+          market_slug: pos.market_slug ?? '',
+          timestamp: nowSec,
+        };
+        insertTrade(syntheticFill);
+
         insertResolution({
           entity_slug: pos.entity_slug,
           condition_id: pos.condition_id,

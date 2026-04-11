@@ -26,10 +26,12 @@ import type { NegRiskRedeemer } from '../execution/neg-risk-redeemer.js';
 import type { PositionRow } from '../storage/repositories/position-repo.js';
 import { closePosition, upsertPosition, getOpenPositions } from '../storage/repositories/position-repo.js';
 import { insertResolution } from '../storage/repositories/resolution-repo.js';
+import { insertTrade } from '../storage/repositories/trade-repo.js';
 import { markMarketClosed } from '../storage/repositories/market-repo.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
-import type { Outcome } from '../types/index.js';
+import type { Outcome, OrderFill } from '../types/index.js';
+import { nanoid } from 'nanoid';
 
 const log = createChildLogger('reconciler');
 
@@ -275,6 +277,77 @@ export class OnChainReconciler {
       : payoutUsd > 0
         ? posSide
         : oppositeSide;
+
+    // 2026-04-10: synthetic SELL trade row for audit-trail completeness.
+    //
+    // The reconciler's close_absent path is the only close-a-position path
+    // that doesn't go through clob-router → insertTrade. That left cash
+    // movements with no matching trade row: downstream queries like
+    // `starting + SUM(SELL) - SUM(BUY) = current_cash` would silently
+    // under-count the SELL side by the close_absent volume.
+    //
+    // Rule: write a synthetic SELL only when we have a VERIFIED outcome from
+    // computeAbsentPayout (win → payout=size, loss → payout=0). These rows
+    // honestly describe cash flow (full redemption for wins, zero-value
+    // redemption for losses). The cash-balance side is still managed by the
+    // wallet-sync step, but the trades table now has a corresponding row
+    // instead of a hole.
+    //
+    // For undetermined PUSHES (realizedPnlOverride===0), we do NOT write a
+    // synthetic SELL: we don't know what cash actually moved for that
+    // position, and writing a zero-valued or cost-basis-valued row would be
+    // fabricating data. The resolution row stays in place as a push; the
+    // aggregate wallet-sync delta covers the accounting without pretending
+    // we know the per-position outcome.
+    //
+    // Ordered BEFORE insertResolution: a trade-insert failure aborts the
+    // whole close (throws), leaving the position open for retry next cycle
+    // rather than ending up with a resolution row but no trade row.
+    if (!isPush) {
+      try {
+        const sellPrice = dbPos.size > 0 ? payoutUsd / dbPos.size : 0;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const syntheticFill: OrderFill = {
+          trade_id: `synth-${nanoid(12)}`,
+          order_id: `synth-${nanoid(12)}`,
+          entity_slug: dbPos.entity_slug,
+          condition_id: dbPos.condition_id,
+          token_id: dbPos.token_id,
+          tx_hash: null,
+          side: 'SELL',
+          size: dbPos.size,
+          price: sellPrice,
+          usdc_size: payoutUsd,
+          fee_usdc: 0,
+          net_usdc: payoutUsd,
+          is_paper: dbPos.is_paper === 1,
+          strategy_id: dbPos.strategy_id ?? '',
+          sub_strategy_id: dbPos.sub_strategy_id ?? undefined,
+          outcome: posSide,
+          market_question: dbPos.market_question ?? '',
+          market_slug: dbPos.market_slug ?? '',
+          timestamp: nowSec,
+        };
+        insertTrade(syntheticFill);
+        log.info(
+          {
+            entity: dbPos.entity_slug,
+            condition: dbPos.condition_id.substring(0, 16),
+            side: 'SELL',
+            net_usdc: payoutUsd,
+            outcome: payoutUsd > 0 ? 'win' : 'loss',
+          },
+          'Synthetic SELL trade recorded for close_absent',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(
+          { entity: dbPos.entity_slug, condition: dbPos.condition_id.substring(0, 16), err: msg },
+          'Failed to write synthetic SELL trade for close_absent — aborting close to retry next cycle',
+        );
+        throw err;
+      }
+    }
 
     insertResolution({
       entity_slug: dbPos.entity_slug,
