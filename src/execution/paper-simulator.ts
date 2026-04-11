@@ -28,6 +28,47 @@ export class PaperSimulator {
     // Get current market data for slippage
     const market = this.marketCache.get(order.condition_id);
 
+    // 2026-04-11 Phase 3: respect maker vs taker execution mode.
+    //
+    // Taker orders (exits, urgent signals) fill immediately at order.price +
+    // slippage. This is the previous default behavior.
+    //
+    // Maker orders (entries) only fill if the book has crossed us — i.e. the
+    // opposite side of the orderbook is at or better than our limit price. If
+    // the book is tighter than our bid, we don't fill, return null, and the
+    // engine treats this as "order still resting." Next scan cycle reprices.
+    //
+    // This teaches R&D the real fill-rate cost of maker-only execution. If
+    // we always instant-filled maker orders in paper, R&D would claim a
+    // +1.12% edge that prod couldn't actually capture because prod would
+    // frequently miss fills.
+    //
+    // Fallback: if we have no orderbook snapshot (first-sight market, WS
+    // feed down, etc.), err on the side of filling. The logs will show the
+    // fallback path so we can measure its frequency.
+    if (order.execution_mode === 'maker' && market) {
+      const book = this.marketCache.getOrderbook(order.token_id);
+      if (book) {
+        const crossed =
+          order.side === 'BUY'
+            ? book.best_ask !== null && book.best_ask <= order.price
+            : book.best_bid !== null && book.best_bid >= order.price;
+        if (!crossed) {
+          log.debug(
+            {
+              order_id: order.order_id,
+              side: order.side,
+              limit: order.price,
+              best_bid: book.best_bid,
+              best_ask: book.best_ask,
+            },
+            'Maker order did not cross book — no fill',
+          );
+          return null;
+        }
+      }
+    }
+
     // Apply slippage to get realistic fill price
     let fillPrice = order.price;
     fillPrice = applySlippage(fillPrice, this.slippageBps, order.side === 'BUY');

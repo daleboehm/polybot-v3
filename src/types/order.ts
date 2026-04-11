@@ -39,6 +39,11 @@ export interface Order extends OrderRequest {
   submitted_at: Date;
   filled_at?: Date;
   cancelled_at?: Date;
+  // 2026-04-11 Phase 3: maker vs taker execution intent.
+  // maker = passive, priced one tick better than market, earns +1.12% edge
+  // taker = aggressive, priced with bid_premium_pct, guarantees fill
+  // Entry signals use maker by default; exit signals use taker.
+  execution_mode?: 'maker' | 'taker';
 }
 
 export interface OrderFill {
