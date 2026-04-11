@@ -22,11 +22,11 @@
 //   - The strategy itself is unchanged — its own dedup logic handles the
 //     case where a priority market was just evaluated by a normal cycle.
 
-import type { EntityManager } from './entity-manager.js';
+import type { EntityManager } from '../entity/entity-manager.js';
 import type { StrategyRegistry } from '../strategy/strategy-registry.js';
 import type { MarketCache } from '../market/market-cache.js';
 import type { RiskEngine } from '../risk/risk-engine.js';
-import type { CLOBRouter } from '../execution/clob-router.js';
+import type { ClobRouter } from '../execution/clob-router.js';
 import type { RiskLimits, Signal, MarketData, EntityState, Position } from '../types/index.js';
 import type { StrategyContext } from '../strategy/strategy-interface.js';
 import { getActivePriorities, markScanned, purgeExpired as purgeExpiredPriorities } from '../storage/repositories/market-priority-repo.js';
@@ -44,7 +44,7 @@ export interface PriorityScannerDeps {
   strategyRegistry: StrategyRegistry;
   marketCache: MarketCache;
   riskEngine: RiskEngine;
-  clobRouter: CLOBRouter;
+  clobRouter: ClobRouter;
   riskLimits: RiskLimits;
   executionConfig: {
     slippage_bps: number;
@@ -165,9 +165,11 @@ export class PriorityScanner {
       for (const entity of entities) {
         if (entity.config.status !== 'active') continue;
 
-        const strategyConfigs = (entity.config.strategies ?? []).map(s =>
-          typeof s === 'string' ? { strategy_id: s, sub_strategy_ids: undefined } : s,
-        );
+        const rawStrategies = entity.config.strategies ?? [];
+        const strategyConfigs: Array<{ strategy_id: string; sub_strategy_ids: string[] | undefined }> =
+          rawStrategies.map((s: string | { strategy_id: string; sub_strategy_ids?: string[] }) =>
+            typeof s === 'string' ? { strategy_id: s, sub_strategy_ids: undefined } : { strategy_id: s.strategy_id, sub_strategy_ids: s.sub_strategy_ids },
+          );
         if (strategyConfigs.length === 0) continue;
 
         // Scoped ctx — getActiveMarkets returns ONLY the priority set
