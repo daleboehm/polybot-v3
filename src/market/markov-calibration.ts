@@ -111,6 +111,56 @@ export function empiricalYesEdge(marketPrice: number): number {
 }
 
 /**
+ * Phase A1 (2026-04-11): tail-zone single-sided dead-band detector.
+ *
+ * Per Polymarket liquidity-rewards docs and the wanguolin MM post-mortem,
+ * single-sided maker quotes in <0.10 or >0.90 price zones collect ZERO
+ * reward score. Our strategies don't currently chase reward score, but the
+ * point stands that makers in these zones:
+ *
+ *   1. Earn nothing from Polymarket's liquidity subsidy program
+ *   2. Eat the full adverse-selection risk of posting in a thin, informed book
+ *   3. Often go unfilled for long windows (the book is crowded on the
+ *      high-prob side, sparse on the tail side)
+ *
+ * This helper flags whether a given price is in a dead-band zone so
+ * strategies / the order builder can make execution-mode decisions
+ * accordingly. It is NOT a "never trade here" signal — strategies still
+ * have valid longshot-fade edges in this zone (Becker's 72.1M-trade study
+ * shows a ~57% over-pricing at tail=0.01).
+ */
+export function isDeadBandZone(price: number): boolean {
+  return price < 0.10 || price > 0.90;
+}
+
+/**
+ * Phase A1 (2026-04-11): decide execution mode for a signal entering in the
+ * deep-tail zone.
+ *
+ * When the side we're BUYING is priced > 0.95, the counterpart tail is < 0.05
+ * and we're in Becker's peak longshot-bias zone: empirical resolve rate is
+ * ~0.9549 at entry=0.95, ~0.9733 at entry=0.97, ~0.9915 at entry=0.99. Our
+ * Markov grid confirms positive edge all the way to 0.99.
+ *
+ * BUT: posting a maker at 0.94 in a book where the fair price is ~0.96 is
+ * a losing proposition — adverse selection concentrates on the informed
+ * traders selling the tail, and our passive order sits unfilled or gets
+ * picked off. The winning play is to cross the book as a taker, pay the
+ * -1.12% Optimism Tax, and capture the dominant empirical edge before the
+ * price moves.
+ *
+ * Returns:
+ *   'taker' when the fade/buy side is in the deep-tail zone (>0.95)
+ *   undefined otherwise (let the order-builder apply its default policy)
+ */
+export function preferredExecutionModeForTail(
+  fadePrice: number,
+): 'taker' | undefined {
+  if (fadePrice > 0.95) return 'taker';
+  return undefined;
+}
+
+/**
  * Side-aware calibration for favorites / convergence / any strategy that isn't
  * fading YES specifically. Given a contract's market price and which side
  * the strategy is betting on, returns the empirical probability that side

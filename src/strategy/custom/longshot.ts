@@ -9,7 +9,7 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
-import { calibratedYesProb, longshotBiasMultiplier } from '../../market/markov-calibration.js';
+import { calibratedYesProb, longshotBiasMultiplier, preferredExecutionModeForTail } from '../../market/markov-calibration.js';
 import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
@@ -180,6 +180,13 @@ export class LongshotStrategy extends BaseStrategy {
     const baseSize = 5;
     const combinedMultiplier = biasMultiplier * overlay.multiplier;
     const biasedSize = Math.max(1, Math.round(baseSize * combinedMultiplier * 100) / 100);
+    // Phase A1 (2026-04-11): in the deep-tail dead-band zone (fadePrice > 0.95),
+    // single-sided makers collect no reward score and eat concentrated adverse
+    // selection. The empirical longshot edge from Becker's grid dominates the
+    // -1.12% taker cost in this zone, so we switch execution mode to taker.
+    // The order-builder reads signal.metadata.preferred_execution_mode and
+    // overrides its default entry-maker policy when this is set.
+    const preferredExecMode = preferredExecutionModeForTail(fadePrice);
     return {
       signal_id: nanoid(),
       entity_slug: ctx.entity.config.slug,
@@ -203,6 +210,8 @@ export class LongshotStrategy extends BaseStrategy {
         scout_overlay_multiplier: overlay.multiplier,
         scout_overlay_reason: overlay.reason,
         scout_overlay_scout_id: overlay.scoutId,
+        preferred_execution_mode: preferredExecMode,
+        in_dead_band: fadePrice > 0.90,
       },
       created_at: new Date(),
     };

@@ -9,7 +9,7 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
-import { calibratedSideProb } from '../../market/markov-calibration.js';
+import { calibratedSideProb, preferredExecutionModeForTail } from '../../market/markov-calibration.js';
 import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
@@ -78,6 +78,11 @@ export class FavoritesStrategy extends BaseStrategy {
       const modelProb =
         ownCalibration ??
         (Number.isFinite(markovCalibration) ? markovCalibration : (favoritePrice + payoff * 0.5));
+
+      // Phase A1 (2026-04-11): when the favorite side we're buying is in the
+      // deep-tail dead-band zone (>0.95), buildSignal() will set
+      // metadata.preferred_execution_mode='taker' so the order-builder
+      // switches from maker to taker. Captured via preferredExecutionModeForTail().
 
       // ─── sub: compounding (now 0.50-0.85 — audit A-P1-4 boundary fix) ───
       // Previously 0.50-0.92 which overlapped with fan_fade (0.85-0.92), causing
@@ -169,6 +174,14 @@ export class FavoritesStrategy extends BaseStrategy {
               scout_overlay_multiplier: fanFadeOverlay.multiplier,
               scout_overlay_reason: fanFadeOverlay.reason,
               scout_overlay_scout_id: fanFadeOverlay.scoutId,
+              // Phase A1: fan_fade buys the underdog priced 0.08-0.15 which
+              // is inside the low-tail dead-band (<0.10 for most). No taker
+              // override here — the underdog side is usually liquid enough
+              // on the bid, and the whole thesis is that the book is mispriced
+              // so we WANT to rest as a maker and collect any informed flow
+              // that disagrees with the hype. Just flag the dead-band state
+              // so the advisor can track performance separately.
+              in_dead_band: underdogPrice < 0.10 || underdogPrice > 0.90,
             },
             created_at: new Date(),
           });
@@ -249,6 +262,10 @@ export class FavoritesStrategy extends BaseStrategy {
         using_calibration: usingCalibration,
         using_own_calibration: usingOwnCalibration,
         using_markov_calibration: usingMarkovCalibration,
+        // Phase A1: tail-zone execution-mode override. Order-builder reads
+        // this field and switches from maker to taker when set to 'taker'.
+        preferred_execution_mode: preferredExecutionModeForTail(price),
+        in_dead_band: price > 0.90,
       },
       created_at: new Date(),
     };

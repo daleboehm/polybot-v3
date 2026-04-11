@@ -25,6 +25,11 @@ export interface OrderRequest {
   strategy_id: string;
   sub_strategy_id?: string;
   signal_id: string;
+  // Phase A2 (2026-04-11): the market's minimum tick size, passed from
+  // risk-engine through to order-builder so the maker offset and price
+  // rounding use the correct precision. On 0.001-tick markets a hardcoded
+  // 0.01 offset gave us 10× worse queue position than necessary.
+  minimum_tick_size?: number;
 }
 
 export interface Order extends OrderRequest {

@@ -78,11 +78,16 @@ export class VolumeSpikeScout extends ScoutBase {
       if (ratio >= 10) priority = 8;
       if (ratio >= 20) priority = 10;
 
+      // Phase A2 (2026-04-11): coarser tick = more edge per fill. Add a
+      // bonus so scout priorities implicitly prefer coarse-tick markets.
+      const tickBonus = this.tickSizePriorityBonus(m.minimum_tick_size);
+      priority = Math.max(1, Math.min(10, priority + tickBonus));
+
       try {
         insertPriority({
           condition_id: m.condition_id,
           priority,
-          reason: `volume spike ${ratio.toFixed(1)}x (${older.volume.toFixed(0)} → ${vol.toFixed(0)}) over ~${Math.round((now - older.timestamp) / 1000)}s`,
+          reason: `volume spike ${ratio.toFixed(1)}x (${older.volume.toFixed(0)} → ${vol.toFixed(0)}) over ~${Math.round((now - older.timestamp) / 1000)}s; tick=${m.minimum_tick_size}`,
           created_by: this.id,
           ttl_ms: TTL_MS,
         });

@@ -45,6 +45,27 @@ function isExitDecision(decision: StrategyDecision): boolean {
   return decision.signal?.is_exit === true;
 }
 
+/**
+ * Phase A1 (2026-04-11): strategies can override the default entry-maker
+ * execution mode by setting `metadata.preferred_execution_mode` on the signal.
+ *
+ * Used for tail-zone dead-band entries where maker posts collect no liquidity
+ * reward and eat concentrated adverse selection — the winning play is to
+ * cross as a taker, pay the -1.12% Optimism Tax, and capture the dominant
+ * Becker empirical edge before informed traders move the price.
+ *
+ * Returns 'maker' | 'taker' | undefined. Undefined = apply default policy.
+ */
+function readPreferredExecutionMode(
+  decision: StrategyDecision,
+): 'maker' | 'taker' | undefined {
+  const metadata = decision.signal?.metadata;
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  const value = (metadata as Record<string, unknown>).preferred_execution_mode;
+  if (value === 'maker' || value === 'taker') return value;
+  return undefined;
+}
+
 export function buildOrder(
   decision: StrategyDecision,
   entity: EntityState,
@@ -56,13 +77,60 @@ export function buildOrder(
 
   const isPaper = entity.config.mode === 'paper';
   const isExit = isExitDecision(decision);
+  const preferredMode = readPreferredExecutionMode(decision);
+
+  // Phase A4 (2026-04-11): price-conditioned maker-only gate.
+  //
+  // Kalshi 72M-trade analysis (Hacking the Markets, Becker): taker losses
+  // average ~32% for trades entered below 25¢ — a combination of the
+  // longshot bias and concentrated informed flow at low prices. Our
+  // existing maker/taker hybrid prefers makers but doesn't enforce a
+  // hard price gate.
+  //
+  // Rule for ENTRIES only (exits bypass — if we need out, we need out):
+  //   price < 0.25 → refuse taker fills entirely. If the signal wanted
+  //                  taker execution (preferredMode = 'taker' from A1's
+  //                  dead-band rule), refuse the order. Better to miss
+  //                  the trade than eat a ~32% tax on a marginal edge.
+  //   0.25 ≤ price < 0.40 → allow maker only; if preferredMode asked
+  //                         for taker, downgrade to maker and rest
+  //                         in the book (accept possible no-fill).
+  //   price ≥ 0.40 → normal maker default, taker override honored.
+  //
+  // The A1 tail rule (preferredMode='taker' at fadePrice > 0.95) still
+  // works for longshot: our fadePrice of 0.95 means the side we're
+  // BUYING is at 0.95, which is well above the 0.25 floor, so the
+  // taker override fires normally. This gate only bites when a signal
+  // targets a low-price BUY (rare — would need a strategy that
+  // explicitly buys the cheap side).
+  const entryPrice = req.price;
+  if (!isExit && preferredMode === 'taker' && entryPrice < 0.25) {
+    log.info({
+      entity: req.entity_slug,
+      strategy: req.strategy_id,
+      price: entryPrice,
+      reason: 'A4: refused taker entry below 25¢',
+    }, 'Order refused by A4 gate');
+    return null;
+  }
 
   // Pricing rule: entries post as maker (one tick below market for BUY,
   // above for SELL). Exits post as taker with the bid premium (existing
   // behavior — urgent, willing to pay the tax).
+  //
+  // Phase A1 (2026-04-11): strategies can override the entry-maker default
+  // via signal.metadata.preferred_execution_mode. Used for tail-zone
+  // entries where resting as a maker is a losing proposition.
+  //
+  // Phase A4 (2026-04-11): between 0.25 and 0.40, even an A1-requested
+  // taker override gets downgraded back to maker. Taker fills in this
+  // zone still have meaningful negative EV per the Kalshi analysis,
+  // just less extreme than <0.25.
   let price = req.price;
   let executionMode: 'maker' | 'taker';
-  if (isExit) {
+  const a4DowngradeToMaker = !isExit && preferredMode === 'taker' && entryPrice < 0.40;
+  const shouldBeTaker = isExit || (preferredMode === 'taker' && !a4DowngradeToMaker);
+  if (shouldBeTaker) {
     // Aggressive taker: cross the book immediately
     executionMode = 'taker';
     if (req.side === 'BUY') {
@@ -72,8 +140,15 @@ export function buildOrder(
     }
   } else {
     // Passive maker: rest in the book at one tick better than market
+    // Phase A2 (2026-04-11): use the market's actual minimum_tick_size,
+    // not a hardcoded 0.01. On 0.001-tick markets a 0.01 offset is 10×
+    // too generous and we lose queue priority; on 0.0001-tick markets
+    // it's 100× too generous. Falls back to 0.01 if req-provided value
+    // is missing or zero.
     executionMode = 'maker';
-    const tick = 0.01;
+    const tick = req.minimum_tick_size && req.minimum_tick_size > 0
+      ? req.minimum_tick_size
+      : 0.01;
     if (req.side === 'BUY') {
       price = price - tick;
     } else {
@@ -81,9 +156,16 @@ export function buildOrder(
     }
   }
 
-  // Round to tick
-  price = roundToTick(price, 0.01);
-  price = roundTo(Math.max(0.01, Math.min(0.99, price)), 2);
+  // Round to the market's actual tick. Phase A2 (2026-04-11): this was
+  // hardcoded 0.01 even for 0.001 / 0.0001 tick markets which rejected valid
+  // orders and made fills less precise. Now reads req.minimum_tick_size.
+  const roundTick = req.minimum_tick_size && req.minimum_tick_size > 0
+    ? req.minimum_tick_size
+    : 0.01;
+  // roundTo precision = number of decimals implied by the tick
+  const tickDecimals = Math.max(2, Math.ceil(-Math.log10(roundTick)));
+  price = roundToTick(price, roundTick);
+  price = roundTo(Math.max(roundTick, Math.min(1 - roundTick, price)), tickDecimals);
 
   const size = roundTo(req.size, 2);
   const usdcAmount = roundTo(price * size, 4);

@@ -77,11 +77,15 @@ export class PriceJumpScout extends ScoutBase {
       if (absMove >= 0.10) priority = 8;
       if (absMove >= 0.20) priority = 10;
 
+      // Phase A2: tick-size weight
+      const tickBonus = this.tickSizePriorityBonus(m.minimum_tick_size);
+      priority = Math.max(1, Math.min(10, priority + tickBonus));
+
       try {
         insertPriority({
           condition_id: m.condition_id,
           priority,
-          reason: `price ${direction} ${(absMove * 100).toFixed(1)}% (${older.mid.toFixed(3)} → ${mid.toFixed(3)}) over ~${Math.round((now - older.timestamp) / 1000)}s`,
+          reason: `price ${direction} ${(absMove * 100).toFixed(1)}% (${older.mid.toFixed(3)} → ${mid.toFixed(3)}) over ~${Math.round((now - older.timestamp) / 1000)}s; tick=${m.minimum_tick_size}`,
           created_by: this.id,
           ttl_ms: TTL_MS,
         });

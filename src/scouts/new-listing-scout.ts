@@ -51,11 +51,15 @@ export class NewListingScout extends ScoutBase {
 
       if ((m.liquidity ?? 0) < MIN_LIQUIDITY) continue;
 
+      // Phase A2: coarser tick = more edge per fill
+      const tickBonus = this.tickSizePriorityBonus(m.minimum_tick_size);
+      const weighted = Math.max(1, Math.min(10, PRIORITY + tickBonus));
+
       try {
         insertPriority({
           condition_id: m.condition_id,
-          priority: PRIORITY,
-          reason: `new listing: ${m.question.substring(0, 80)}`,
+          priority: weighted,
+          reason: `new listing: ${m.question.substring(0, 60)} (tick=${m.minimum_tick_size})`,
           created_by: this.id,
           ttl_ms: TTL_MS,
         });

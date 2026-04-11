@@ -94,4 +94,30 @@ export abstract class ScoutBase {
       summary: null,
     };
   }
+
+  /**
+   * Phase A2 (2026-04-11): tick-size-weighted priority boost.
+   *
+   * Polymarket tick sizes vary per market: 0.1 / 0.01 / 0.001 / 0.0001.
+   * A maker posted "1 tick better than market" captures different edge
+   * per fill depending on tick size:
+   *   tick=0.01  → +1¢  captured per fill (baseline)
+   *   tick=0.001 → +0.1¢ captured per fill (10× less)
+   *   tick=0.0001 → +0.01¢ captured per fill (100× less)
+   *   tick=0.1   → +10¢  captured per fill (10× more)
+   *
+   * For a given scout-detected opportunity, coarser ticks give us
+   * strictly more EV per fill. This helper returns a priority bonus
+   * that prefers coarse-tick markets when a scout finds a signal.
+   *
+   * Returns an integer in [0, 2] to add to a scout's base priority
+   * level. Caller is responsible for capping the total priority at 10.
+   */
+  protected tickSizePriorityBonus(minimumTickSize: number | null | undefined): number {
+    if (!minimumTickSize || minimumTickSize <= 0) return 0;
+    if (minimumTickSize >= 0.1) return 2;     // coarse: +2
+    if (minimumTickSize >= 0.01) return 1;    // standard: +1
+    if (minimumTickSize >= 0.001) return 0;   // fine: neutral
+    return -1;                                // ultra-fine: demote
+  }
 }

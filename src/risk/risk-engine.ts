@@ -213,6 +213,9 @@ export class RiskEngine {
     // Build order request if approved
     let orderRequest: OrderRequest | undefined;
     if (approved) {
+      // Phase A2 (2026-04-11): thread the market's minimum_tick_size through
+      // to the order-builder so maker pricing uses correct precision.
+      const market = this.marketCache?.get(signal.condition_id);
       orderRequest = {
         entity_slug: signal.entity_slug,
         condition_id: signal.condition_id,
@@ -224,6 +227,7 @@ export class RiskEngine {
         strategy_id: signal.strategy_id,
         sub_strategy_id: signal.sub_strategy_id,
         signal_id: signal.signal_id,
+        minimum_tick_size: market?.minimum_tick_size,
       };
     }
 

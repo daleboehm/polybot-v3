@@ -17,6 +17,7 @@ import type { StrategyWeighter } from './strategy-weighter.js';
 import type { MarketCache } from '../market/market-cache.js';
 import { kellySize, roundTo } from '../utils/math.js';
 import { computeLiquidityBound, logLiquidityEvent } from './liquidity-check.js';
+import { washTradingMultiplier, logPenaltyDecision } from '../market/wash-trading-penalty.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('position-sizer');
@@ -62,6 +63,27 @@ export function calculatePositionSize(
       signal.entity_slug,
     );
     sizeUsd = sizeUsd * stratWeight;
+  }
+
+  // 2b. Phase A3 (2026-04-11): wash-trading penalty. Columbia Nov 2025 study
+  //     found ~25% of Polymarket volume is fake (peaked 60% Dec 2024, 90%+
+  //     in sports/election airdrop windows). We size by volume_24h today
+  //     and systematically over-allocate to fake-liquidity markets.
+  //     Proxy signal: (volume_24h / liquidity) churn ratio + category tags.
+  //     Applied BEFORE the hard caps so it can never exceed them, but AFTER
+  //     the strategy weight so a "trusted" strategy still gets proportional
+  //     haircut on a suspicious market.
+  let washMultiplier = 1.0;
+  let washReason: string | null = null;
+  if (marketCache) {
+    const market = marketCache.get(signal.condition_id);
+    if (market) {
+      const penalty = washTradingMultiplier(market);
+      washMultiplier = penalty.multiplier;
+      washReason = penalty.reason;
+      logPenaltyDecision(signal.condition_id, penalty);
+      sizeUsd = sizeUsd * washMultiplier;
+    }
   }
 
   // 3. Apply hard caps LAST — they're the binding constraint.
@@ -121,6 +143,8 @@ export function calculatePositionSize(
     method,
     capped_by: cappedBy,
     strategy_weight: stratWeight,
+    wash_multiplier: washMultiplier,
+    wash_reason: washReason,
   }, 'Position sized');
 
   return { size_usd: sizeUsd, size_shares: roundTo(sizeShares, 2), method, capped_by: cappedBy, strategy_weight: stratWeight };
