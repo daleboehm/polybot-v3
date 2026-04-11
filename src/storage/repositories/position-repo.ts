@@ -45,6 +45,60 @@ export function closePosition(entitySlug: string, conditionId: string, tokenId: 
   `).run(status, entitySlug, conditionId, tokenId);
 }
 
+// 2026-04-10: the mutator the upsertPosition comment has been asking for since day 1.
+//
+// upsertPosition's ON CONFLICT overwrites size/cost_basis/avg_entry_price because its
+// intended caller is the on-chain reconciler's orphan-insert path — that's a "sync DB
+// to on-chain truth" operation where the incoming row already represents the full
+// aggregated wallet state. That semantics is correct for its caller.
+//
+// The engine's BUY-fill handler (engine.ts:processPosition) was also calling
+// upsertPosition with ONE fill's data, expecting it to accumulate on repeat fills to
+// the same (entity, condition, token). It didn't. Every second BUY dropped the first
+// one's cost_basis and size on the floor. That was the root cause of R&D's ~$400
+// equity leak: whenever a strategy hit a market it already held (averaging-down, or
+// a later cycle re-entering after partial exit), cost_basis was overwritten instead
+// of summed. The SAME cash was debited twice but only recorded once. Over 1346 buys,
+// that added up.
+//
+// This function is the accumulate-on-conflict counterpart. INSERT on first fill,
+// accumulate size/cost_basis and recompute the weighted average entry price on every
+// subsequent fill. SQLite evaluates ON CONFLICT RHS expressions against the OLD row,
+// so referencing `size` / `cost_basis` here gives the existing values — safe to add
+// `excluded.size` / `excluded.cost_basis`.
+//
+// Weighted-average math: avg = (old_cost + new_cost) / (old_size + new_size). The
+// two filled amounts are weighted by their dollars, which is what we want. NULLIF
+// guards against a divide-by-zero in the degenerate case where both sizes are 0.
+export function addFillToPosition(p: PositionUpsert): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO positions (
+      entity_slug, condition_id, token_id, side, size, avg_entry_price,
+      cost_basis, current_price, unrealized_pnl, market_question, market_slug,
+      strategy_id, sub_strategy_id, is_paper, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+    ON CONFLICT(entity_slug, condition_id, token_id) DO UPDATE SET
+      size = size + excluded.size,
+      cost_basis = cost_basis + excluded.cost_basis,
+      avg_entry_price = (cost_basis + excluded.cost_basis)
+                        / NULLIF(size + excluded.size, 0),
+      current_price = excluded.current_price,
+      unrealized_pnl = excluded.unrealized_pnl,
+      updated_at = datetime('now')
+      -- intentionally NOT updating strategy_id / sub_strategy_id: preserve the
+      -- original strategy ownership of the position row (same contamination fix
+      -- rationale as upsertPosition above). Also: status stays 'open' because
+      -- ON CONFLICT only fires for an already-open row; a closed row is a
+      -- different (entity, condition, token) lifecycle.
+  `).run(
+    p.entity_slug, p.condition_id, p.token_id, p.side, p.size,
+    p.avg_entry_price, p.cost_basis, p.current_price ?? null,
+    p.unrealized_pnl ?? null, p.market_question ?? null, p.market_slug ?? null,
+    p.strategy_id ?? null, p.sub_strategy_id ?? null, p.is_paper ? 1 : 0,
+  );
+}
+
 export function getOpenPositions(entitySlug: string): PositionRow[] {
   const db = getDatabase();
   return db.prepare(`

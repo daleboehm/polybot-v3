@@ -36,7 +36,7 @@ import { OddsApiClient } from '../market/odds-api-client.js';
 import { KalshiClient } from '../market/kalshi-client.js';
 import { FredClient } from '../market/fred-client.js';
 // value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/README.md
-import { upsertPosition, closePosition, updatePositionPrice } from '../storage/repositories/position-repo.js';
+import { upsertPosition, addFillToPosition, closePosition, updatePositionPrice } from '../storage/repositories/position-repo.js';
 import { insertSnapshot } from '../storage/repositories/snapshot-repo.js';
 import { insertResolution } from '../storage/repositories/resolution-repo.js';
 import { getOpenPositionCount, getOpenPositions, getAllOpenPositions } from '../storage/repositories/position-repo.js';
@@ -793,7 +793,15 @@ export class Engine {
 
   private processPosition(fill: OrderFill): void {
     if (fill.side === 'BUY') {
-      upsertPosition({
+      // 2026-04-10 averaging-down bug fix: switched from upsertPosition to
+      // addFillToPosition. The old call was dropping the second (and third,
+      // fourth...) BUY fill on any (entity, condition, token) the DB already
+      // held, because upsertPosition's ON CONFLICT overwrites size/cost_basis
+      // with the new fill's values instead of accumulating them. Root cause of
+      // R&D's silent ~$400 equity leak: 1346 BUY trades but open_cost_basis
+      // only captured ~$9,588, with the gap exactly matching the sum of
+      // second-fill values on averaged positions.
+      addFillToPosition({
         entity_slug: fill.entity_slug,
         condition_id: fill.condition_id,
         token_id: fill.token_id,
