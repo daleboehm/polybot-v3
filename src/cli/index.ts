@@ -347,37 +347,53 @@ program
     }
 
     const redeemable = allPositions.filter(p => p.redeemable === true);
+    // NegRiskAdapter only handles negRisk markets. Non-negRisk positions
+    // use a different contract path (CTF Exchange) with a different signature.
+    // For now we redeem negRisk positions through NegRiskRedeemer and skip
+    // the rest with a clear log line so the operator knows to handle them
+    // separately.
+    const negRiskRedeemable = redeemable.filter(p => p.negativeRisk === true);
+    const otherRedeemable = redeemable.filter(p => p.negativeRisk !== true);
     console.log(`\n=== Redeem All ===`);
-    console.log(`Wallet:         ${proxyOrEoa}`);
-    console.log(`Total positions: ${allPositions.length}`);
-    console.log(`Redeemable:      ${redeemable.length}`);
-    console.log(`Dry run:         ${opts.dryRun ? 'YES' : 'NO'}`);
+    console.log(`Wallet:            ${proxyOrEoa}`);
+    console.log(`Total positions:   ${allPositions.length}`);
+    console.log(`Redeemable:        ${redeemable.length}`);
+    console.log(`  negRisk:         ${negRiskRedeemable.length} (handled by this command)`);
+    console.log(`  non-negRisk:     ${otherRedeemable.length} (SKIPPED — needs separate CTF Exchange redemption path)`);
+    console.log(`Dry run:           ${opts.dryRun ? 'YES' : 'NO'}`);
     const limit = Number(opts.limit) || 0;
-    if (limit > 0) console.log(`Limit:           ${limit}`);
+    if (limit > 0) console.log(`Limit:             ${limit}`);
     console.log();
 
-    if (redeemable.length === 0) {
-      console.log('Nothing to redeem.');
+    if (otherRedeemable.length > 0) {
+      console.log(`Non-negRisk redeemable positions (skipped):`);
+      for (const p of otherRedeemable) {
+        const v = Number(p.currentValue) || 0;
+        console.log(`  [${p.outcome}] \$${v.toFixed(4)}  ${p.title?.substring(0, 60)}`);
+      }
+      console.log();
+    }
+
+    if (negRiskRedeemable.length === 0) {
+      console.log('Nothing to redeem via NegRiskAdapter.');
       closeDatabase();
       process.exit(0);
     }
 
-    // Group by conditionId. NegRiskAdapter.redeemPositions() has this
-    // calling convention (from Polymarket's own contract source at
-    // github.com/Polymarket/neg-risk-ctf-adapter):
+    // Group by conditionId. NegRiskAdapter.redeemPositions() convention
+    // per Polymarket's own contract source:
     //
     //   _amounts should always have length 2, with the first element
     //   being the amount of YES tokens to redeem and the second element
     //   being the amount of NO tokens to redeem.
     //
-    // So for each unique conditionId we need to aggregate the YES-side
-    // size and the NO-side size separately, then call
-    //   redeemPositions(conditionId, [yesMicro, noMicro])
+    // We use outcomeIndex (0 or 1) from the Data API rather than the
+    // outcome name string, because non-standard outcome strings can
+    // appear on some markets. For negRisk markets (the only ones this
+    // command handles), outcomeIndex is reliably 0 for YES-side and 1
+    // for NO-side.
     //
-    // For a typical Polymarket position we hold ONE side per conditionId,
-    // so one of yesSize/noSize is 0 and the other is the full position size.
-    //
-    // Tokens are 6-decimal (USDC-denominated) → sizeMicro = floor(size * 1e6)
+    // Tokens are 6-decimal USDC-denominated: sizeMicro = floor(size * 1e6)
     const byCondition = new Map<string, {
       title: string;
       yesSize: number;
@@ -385,7 +401,7 @@ program
       totalValue: number;
       cashPnl: number;
     }>();
-    for (const p of redeemable) {
+    for (const p of negRiskRedeemable) {
       const existing = byCondition.get(p.conditionId) ?? {
         title: p.title || '?',
         yesSize: 0,
@@ -396,20 +412,20 @@ program
       const size = Number(p.size) || 0;
       const value = Number(p.currentValue) || 0;
       const pnl = Number(p.cashPnl) || 0;
-      const outcomeUpper = (p.outcome ?? '').toString().toUpperCase();
-      if (outcomeUpper === 'YES') {
+      const idx = Number(p.outcomeIndex);
+      if (idx === 0) {
         existing.yesSize += size;
-      } else if (outcomeUpper === 'NO') {
+      } else if (idx === 1) {
         existing.noSize += size;
       } else {
-        console.log(`    WARN: unknown outcome "${p.outcome}" for ${p.conditionId.substring(0, 14)} — skipping`);
+        console.log(`    WARN: unexpected outcomeIndex=${p.outcomeIndex} outcome=${p.outcome} for ${p.conditionId.substring(0, 14)} — skipping`);
         continue;
       }
       existing.totalValue += value;
       existing.cashPnl += pnl;
       byCondition.set(p.conditionId, existing);
     }
-    console.log(`Unique condition IDs: ${byCondition.size}`);
+    console.log(`Unique condition IDs (negRisk): ${byCondition.size}`);
     console.log();
 
     // Construct the redeemer
