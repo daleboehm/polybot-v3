@@ -135,9 +135,14 @@ export class LlmNewsScout extends ScoutBase {
     this.log = createChildLogger(`scout:${this.id}`);
     const apiKey = process.env.ANTHROPIC_API_KEY ?? null;
     if (apiKey) {
+      // maxRetries reduced from 4 to 1. With 4 retries at 30s timeout
+      // each, a failing call could hang for 2+ minutes before the scout
+      // reported anything. With 1 retry the total hang time is max 60s
+      // (initial attempt + 1 retry), which is within one scout-tick
+      // window and produces an error log we can actually see.
       this.client = new Anthropic({
         apiKey,
-        maxRetries: 4,
+        maxRetries: 1,
         timeout: REQUEST_TIMEOUT_MS,
       });
     } else {
@@ -175,18 +180,19 @@ export class LlmNewsScout extends ScoutBase {
     const sample = sorted.slice(0, MAX_MARKETS_PER_CALL);
     this.log.info({ candidates: candidates.length, sample: sample.length }, 'LLM scout dispatching API call');
 
-    // Fire-and-forget the API call so the scout coordinator's 60s tick
-    // doesn't wait on it. The async work writes intel/priority rows
-    // directly; the ScoutRunResult returned here is the immediate
-    // "nothing written yet" baseline. The next tick will see the actual
-    // writes via the coordinator's aggregated counters... except the
-    // coordinator doesn't aggregate across ticks. So the run summary
-    // logged here is a synchronous snapshot only.
     this.lastCallAt = now;
     this.inflightCall = true;
-    void this.runAsync(sample).finally(() => {
-      this.inflightCall = false;
-    });
+    this.runAsync(sample)
+      .catch((err) => {
+        this.log.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'LLM scout runAsync rejected (outer catch)',
+        );
+      })
+      .finally(() => {
+        this.inflightCall = false;
+        this.log.info('LLM scout async call completed (finally block)');
+      });
 
     return {
       scout_id: this.id,
