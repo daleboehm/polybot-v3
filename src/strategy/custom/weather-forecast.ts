@@ -365,18 +365,64 @@ export class WeatherForecastStrategy extends BaseStrategy {
     if (!coords) return null;
 
     try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords[0]}&longitude=${coords[1]}&daily=temperature_2m_max,temperature_2m_min&forecast_days=3&temperature_unit=fahrenheit&timezone=auto`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) return null;
+      // Phase R1.2 (2026-04-12): upgraded from the default GFS model to
+      // ECMWF AIFS 0.25° — the AI-powered weather model launched July 2025,
+      // CC-BY-4.0 licensed since Oct 2025. Per Vvtentt101 research: 20%
+      // better temperature accuracy than classical ECMWF IFS.
+      //
+      // Using the ENSEMBLE endpoint as the primary source (not the forecast
+      // endpoint, which returns nulls for AIFS). The ensemble endpoint gives
+      // 50 members + a control run. We use the control run as the point
+      // forecast and compute min/max across members for spread (which the
+      // ensemble_spread_fade sub-strategy consumes separately via
+      // getEnsembleSpread in data-feeds.ts).
+      //
+      // Fallback: if AIFS returns nulls (model run not yet available for
+      // this forecast cycle), fall back to the default model which is
+      // always populated.
+      const aifsUrl = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${coords[0]}&longitude=${coords[1]}&daily=temperature_2m_max,temperature_2m_min&forecast_days=3&temperature_unit=fahrenheit&timezone=auto&models=ecmwf_aifs025`;
+      const defaultUrl = `https://api.open-meteo.com/v1/forecast?latitude=${coords[0]}&longitude=${coords[1]}&daily=temperature_2m_max,temperature_2m_min&forecast_days=3&temperature_unit=fahrenheit&timezone=auto`;
+      let url = aifsUrl;
+      let useAifs = true;
+      let response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        // AIFS endpoint failed — fall back to default
+        if (useAifs) {
+          url = defaultUrl;
+          useAifs = false;
+          response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (!response.ok) return null;
+        } else {
+          return null;
+        }
+      }
 
       const data = await response.json() as OpenMeteoResponse;
       const daily = data.daily;
       if (!daily?.temperature_2m_max?.length || !daily?.temperature_2m_min?.length) return null;
 
-      // Use tomorrow's forecast (index 1) for markets resolving tomorrow,
-      // today's (index 0) for markets resolving today
-      const high_f = daily.temperature_2m_max[0];
-      const low_f = daily.temperature_2m_min[0];
+      // AIFS ensemble returns the control member as the non-suffixed key.
+      // If the control value is null (model run not published yet), fall
+      // back to the default endpoint.
+      let high_f = daily.temperature_2m_max[0];
+      let low_f = daily.temperature_2m_min[0];
+      if ((high_f === null || high_f === undefined) && useAifs) {
+        // AIFS not available for this cycle — fallback
+        try {
+          const fallbackResp = await fetch(defaultUrl, { signal: AbortSignal.timeout(10_000) });
+          if (fallbackResp.ok) {
+            const fallbackData = await fallbackResp.json() as OpenMeteoResponse;
+            if (fallbackData.daily?.temperature_2m_max?.[0] !== null) {
+              high_f = fallbackData.daily.temperature_2m_max[0];
+              low_f = fallbackData.daily.temperature_2m_min[0];
+              useAifs = false;
+            }
+          }
+        } catch {
+          // Double fallback failed — use whatever we got
+        }
+      }
+      if (high_f === null || high_f === undefined || low_f === null || low_f === undefined) return null;
 
       const forecast: ForecastData = {
         city,
