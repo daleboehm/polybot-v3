@@ -12,7 +12,7 @@ export interface ExitSignal {
   entity_slug: string;
   condition_id: string;
   token_id: string;
-  reason: 'stop_loss' | 'hard_stop' | 'profit_target';
+  reason: 'stop_loss' | 'hard_stop' | 'profit_target' | 'trailing_lock';
   current_pnl_pct: number;
   current_pnl_usd: number;
 }
@@ -57,6 +57,34 @@ export class StopLossMonitor {
         condition_id: pos.condition_id,
         token_id: pos.token_id,
         reason: 'profit_target',
+        current_pnl_pct: pnlPct,
+        current_pnl_usd: pnlUsd,
+      };
+    }
+
+    // 2026-04-11 Phase 2.5: trailing profit lock.
+    // If the position has EVER reached peak PnL >= trailing_activation_pct
+    // (default 20%) AND current PnL has dropped below peak * retention
+    // (default 70%), trigger an exit to lock in at least (peak * 0.70) of
+    // the observed profit.
+    //
+    // CRITICAL: the trigger is gated on pnlPct > 0 so this NEVER fires on
+    // a loss. This respects Dale's NO-LOSE mantra — it's upside protection,
+    // not a stop-loss. Losing positions are held to resolution.
+    const trailActivation = this.limits.trailing_activation_pct ?? 0.20;
+    const trailRetention = this.limits.trailing_retention_pct ?? 0.70;
+    const peak = pos.peak_pnl_pct ?? 0;
+    if (
+      trailRetention > 0 &&
+      peak >= trailActivation &&
+      pnlPct > 0 && // never exit at a loss
+      pnlPct < peak * trailRetention
+    ) {
+      return {
+        entity_slug: pos.entity_slug,
+        condition_id: pos.condition_id,
+        token_id: pos.token_id,
+        reason: 'trailing_lock',
         current_pnl_pct: pnlPct,
         current_pnl_usd: pnlUsd,
       };

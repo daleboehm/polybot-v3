@@ -39,6 +39,26 @@ export interface DatabaseConfig {
   path: string;
 }
 
+// Phase 2 (2026-04-11): attention router config. Runs a 30-second
+// parallel scan on markets the scouts flagged as high-priority so the
+// engine reacts to breaking moves faster than its normal 5-min cycle.
+export interface PriorityScannerConfig {
+  enabled: boolean;
+  interval_ms: number;
+  max_priorities_per_run: number;
+  min_scan_gap_ms: number;
+  gc_every_n_runs: number;
+}
+
+// Phase 4 (2026-04-11): in-process scout fleet. Scouts run inside the
+// engine, watch the market cache for patterns, and write priority /
+// intel rows that the PriorityScanner + scout-overlay consume.
+export interface ScoutsConfig {
+  enabled: boolean;
+  interval_ms: number;
+  disabled_scouts: string[];
+}
+
 export interface AppConfig {
   engine: EngineConfig;
   risk: RiskLimits;
@@ -47,5 +67,7 @@ export interface AppConfig {
   dashboard: DashboardConfig;
   database: DatabaseConfig;
   advisor: AdvisorConfig;
+  priority_scanner: PriorityScannerConfig;
+  scouts: ScoutsConfig;
   entities: EntityConfig[];
 }

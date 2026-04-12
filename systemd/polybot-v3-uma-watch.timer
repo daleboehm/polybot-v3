@@ -1,0 +1,14 @@
+[Unit]
+Description=Polybot V3 UMA dispute watcher (prod) — hourly
+Requires=polybot-v3-uma-watch.service
+
+[Timer]
+# First run: 10 minutes after boot (let the engine settle + backfill run first)
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=3min
+Unit=polybot-v3-uma-watch.service
+
+[Install]
+WantedBy=timers.target

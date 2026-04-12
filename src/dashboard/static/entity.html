@@ -96,11 +96,24 @@ async function load() {
   var e = entities.find(function(x){return x.slug === SLUG});
   if (!e) { document.getElementById('entityName').textContent = 'Entity not found'; return; }
 
-  var positions = await fetch('/api/'+SLUG+'/positions').then(function(r){return r.json()}).catch(function(){return []});
+  // 2026-04-11 Phase 1.6: use the new pre-joined endpoint so positions
+  // come back with market_end_date + uma_resolution_status already attached.
+  // Fallback to legacy /positions if the new route isn't up yet.
+  var positions = await fetch('/api/'+SLUG+'/positions-with-markets').then(function(r){return r.json()}).catch(function(){return []});
+  if (!positions || positions.length === 0) {
+    positions = await fetch('/api/'+SLUG+'/positions').then(function(r){return r.json()}).catch(function(){return []});
+  }
   var resolutions = await fetch('/api/'+SLUG+'/resolutions').then(function(r){return r.json()}).catch(function(){return []});
-  var allMarkets = await fetch('/api/markets/all').then(function(r){return r.json()}).catch(function(){return []});
+  // 2026-04-11: fetch per-strategy performance rows (from v_strategy_performance
+  // view, which already applies the strict < 0 loss filter + correct win-rate
+  // formula after the 8973494 view fix). We filter by entity_slug rather than
+  // tallying client-side from the 50-row resolutions endpoint.
+  var allStrategyRows = await fetch('/api/strategies').then(function(r){return r.json()}).catch(function(){return []});
+  // marketMap retained for legacy fallback path — empty if endpoint absent
   var marketMap = {};
-  allMarkets.forEach(function(m) { marketMap[m.condition_id] = m; });
+  positions.forEach(function(p) {
+    if (p.market_end_date) marketMap[p.condition_id] = { end_date: p.market_end_date, uma_resolution_status: p.uma_resolution_status };
+  });
 
   // Header
   document.title = e.name + ' - Gemini Capital';
@@ -132,14 +145,32 @@ async function load() {
   document.getElementById('posBody').innerHTML = positions.length === 0
     ? '<tr><td colspan="8" style="color:#718096;text-align:center;padding:20px">No open positions</td></tr>'
     : positions.map(function(p) {
-        var mkt = marketMap[p.condition_id];
+        // 2026-04-11 Phase 1.6: triage state for overdue positions using
+        // uma_resolution_status from the UMA dispute watcher.
+        //   - uma_resolution_status empty + past end_date → 🔴 "Overdue"
+        //     (Data API didn't drop it, CLOB doesn't know outcome)
+        //   - uma_resolution_status non-empty non-resolved → ⚫ "UMA Pending"
+        //     (oracle is working on it; we hold and wait per policy)
+        //   - uma_resolution_status "resolved" → ⚪ "Resolved" (reconciler
+        //     will close it on next cycle)
+        //   - endDate in future → normal h / d display
+        var mkt = marketMap[p.condition_id] || (p.market_end_date ? {end_date: p.market_end_date, uma_resolution_status: p.uma_resolution_status} : null);
         var endDate = '-';
         if (mkt && mkt.end_date) {
           var d = new Date(mkt.end_date);
           if (!isNaN(d.getTime())) {
             var now = new Date();
             var diffH = Math.round((d - now) / 3600000);
-            if (diffH < 0) endDate = '<span style="color:#ef4444">Overdue</span>';
+            var uma = (mkt.uma_resolution_status || '').toLowerCase();
+            if (diffH < 0) {
+              if (uma && uma !== 'resolved' && uma !== 'settled') {
+                endDate = '<span style="color:#a78bfa" title="UMA oracle working: ' + mkt.uma_resolution_status + '">UMA Pending</span>';
+              } else if (uma === 'resolved' || uma === 'settled') {
+                endDate = '<span style="color:#9ca3af" title="Resolved, awaiting reconciler">Resolved</span>';
+              } else {
+                endDate = '<span style="color:#ef4444" title="Past end_date, UMA has not started">Overdue</span>';
+              }
+            }
             else if (diffH < 24) endDate = '<span style="color:#f6ad55">' + diffH + 'h</span>';
             else if (diffH < 168) endDate = Math.round(diffH/24) + 'd';
             else endDate = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
@@ -156,22 +187,35 @@ async function load() {
     document.getElementById('posFoot').innerHTML = '<tr><td style="color:#f6ad55">TOTAL</td><td></td><td>'+totalSize.toFixed(2)+'</td><td></td><td style="color:#f6ad55">'+F(totalCostBasis)+'</td><td class="green" style="font-weight:700">'+F(totalEstGain)+'</td><td></td><td></td></tr>';
   }
 
-  // Strategy Performance
-  var stratMap = {};
-  resolutions.forEach(function(r) {
-    var sid = r.strategy_id || 'unknown';
-    if (!stratMap[sid]) stratMap[sid] = {wins:0, losses:0, pnl:0};
-    if (r.realized_pnl > 0) stratMap[sid].wins++;
-    else stratMap[sid].losses++;
-    stratMap[sid].pnl += r.realized_pnl;
-  });
-  var allStrats = ['weather_forecast','crypto_price','favorites','complement','longshot','value','skew','convergence'];
+  // Strategy Performance — 2026-04-11 fixed.
+  // Previous implementation had three bugs:
+  //   1. Counted pushes (realized_pnl === 0) as losses by using `if > 0 else loss`
+  //   2. Only tallied the last 50 resolutions from /api/:slug/resolutions
+  //   3. Had a stale strategy list (complement/value/skew removed, sportsbook_fade/
+  //      cross_market/macro_forecast never added)
+  // Fix: use /api/strategies which reads v_strategy_performance (already has
+  // the strict < 0 loss filter + correct win-rate formula from commit 8973494),
+  // aggregate sub-strategies up to parent strategy, filter by this entity.
+  var stratAgg = {}; // strategy_id -> {wins, losses, pnl, n}
+  (allStrategyRows || [])
+    .filter(function(row) { return row.entity_slug === SLUG; })
+    .forEach(function(row) {
+      var sid = row.strategy_id || 'unknown';
+      if (!stratAgg[sid]) stratAgg[sid] = {wins:0, losses:0, pnl:0, n:0};
+      stratAgg[sid].wins += row.wins || 0;
+      stratAgg[sid].losses += row.losses || 0;
+      stratAgg[sid].pnl += row.total_pnl || 0;
+      stratAgg[sid].n += row.total_resolutions || 0;
+    });
+  // Current strategy list (from config/entities.yaml polybot block) —
+  // matches the 8 strategies active on prod. R&D has the same set.
+  var allStrats = ['weather_forecast','crypto_price','favorites','longshot','convergence','sportsbook_fade','cross_market','macro_forecast'];
   document.getElementById('stratBody').innerHTML = allStrats.map(function(s) {
-    var d = stratMap[s];
-    if (d) {
-      var total = d.wins + d.losses;
+    var d = stratAgg[s];
+    if (d && d.n > 0) {
+      var total = d.wins + d.losses; // exclude pushes from W/L denominator
       var swr = total > 0 ? ((d.wins/total)*100).toFixed(1)+'%' : '-';
-      return '<tr><td><span class="strategy-tag">'+s+'</span></td><td>'+total+'</td><td><span class="green">'+d.wins+'</span>/<span class="red">'+d.losses+'</span></td><td>'+swr+'</td><td class="'+C(d.pnl)+'">'+F(d.pnl)+'</td><td style="color:#10b981">Active</td></tr>';
+      return '<tr><td><span class="strategy-tag">'+s+'</span></td><td>'+d.n+'</td><td><span class="green">'+d.wins+'</span>/<span class="red">'+d.losses+'</span></td><td>'+swr+'</td><td class="'+C(d.pnl)+'">'+F(d.pnl)+'</td><td style="color:#10b981">Active</td></tr>';
     }
     return '<tr><td><span class="strategy-tag">'+s+'</span></td><td>-</td><td>-</td><td>-</td><td>-</td><td style="color:#718096">Inactive</td></tr>';
   }).join('');
@@ -193,20 +237,20 @@ async function load() {
       var d = JSON.parse(ev.data);
       if (d.fill && d.fill.entity_slug === SLUG) {
         evCount++;
-        var ts = new Date().toLocaleTimeString();
+        var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
         elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#10b981">FILL: '+d.fill.side+' '+d.fill.outcome+' @ $'+d.fill.price.toFixed(3)+' ('+F(d.fill.usdc_size)+')</span></div>' + elog.innerHTML;
       }
     });
     es.addEventListener('engine:cycle_complete', function(ev) {
       var d = JSON.parse(ev.data);
       evCount++;
-      var ts = new Date().toLocaleTimeString();
+      var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
       elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#06b6d4">Cycle '+d.cycle+': '+d.signals+' signals, '+d.orders+' orders ('+d.duration_ms+'ms)</span></div>' + elog.innerHTML;
     });
     es.addEventListener('risk:lockout', function(ev) {
       var d = JSON.parse(ev.data);
       if (d.entity_slug === SLUG) {
-        var ts = new Date().toLocaleTimeString();
+        var ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
         elog.innerHTML = '<div class="event"><span style="color:#4a5568">'+ts+'</span> <span style="color:#ef4444">LOCKOUT: '+d.reason+'</span></div>' + elog.innerHTML;
       }
     });

@@ -1,0 +1,156 @@
+================================================================================
+    DISCORD WEBHOOK ALERT SYSTEM — QUICK START
+    Polymarket Trading Operation (geminicap)
+================================================================================
+
+STATUS: DEPLOYED & READY (Awaiting webhook URL)
+
+VPS: 178.62.225.235:2222
+Script: /opt/polybot/discord_alerts.py (13 KB, executable)
+Config: /opt/polybot/state/discord_config.json (disabled until webhook set)
+Cron: Daily summary at 12:00 UTC (7:00 AM CT) — already configured
+
+================================================================================
+ACTIVATION (You): 3 STEPS
+================================================================================
+
+STEP 1: Create Discord Server
+  • Go to Discord.com
+  • Click + → Create Server → Name "Polymarket Trading"
+  • Create channels: #trades, #alerts, #daily-summary
+
+STEP 2: Create Webhook
+  • Server Settings → Integrations → Webhooks → New Webhook
+  • Name: "Polymarket Bot"
+  • Channel: Select any (default #trades)
+  • Copy Webhook URL (keep safe)
+
+STEP 3: Configure on VPS
+  ssh -i /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/deploy/armorstack_vps_key \
+      -p 2222 -o StrictHostKeyChecking=no \
+      root@178.62.225.235 \
+      "cd /opt/polybot && /opt/polybot/venv/bin/python3 discord_alerts.py configure 'PASTE_WEBHOOK_URL_HERE'"
+
+  Expected output: [OK] Webhook configured and alerts enabled
+
+STEP 4: Test
+  ssh -i /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/deploy/armorstack_vps_key \
+      -p 2222 -o StrictHostKeyChecking=no \
+      root@178.62.225.235 \
+      "cd /opt/polybot && /opt/polybot/venv/bin/python3 discord_alerts.py test"
+
+  Expected: Test message appears in Discord channel
+
+================================================================================
+ALERT TYPES (Automatic after activation)
+================================================================================
+
+🟢 TRADE_EXECUTED (Green)     — Position opened: market, side, size, price, confidence
+🔴 STOP_LOSS_HIT (Red)        — Position hit stop loss: market, loss amount
+🟡 PROFIT_TAKEN (Gold)        — Position hit profit target: market, gain amount
+🔵 POSITION_RESOLVED (Blue)   — Market resolved: outcome, payout
+🟠 SYSTEM_ALERT (Orange)      — Error alerts, health checks, cron failures
+⚪ DAILY_SUMMARY (White)      — Portfolio brief (daily at 12:00 UTC)
+🟣 INTELLIGENCE (Purple)      — Edge signals, arbitrage opportunities
+
+================================================================================
+INTEGRATION WITH TRADING SCRIPTS
+================================================================================
+
+In auto_trader.py, auto_redeem.py, or other trading modules:
+
+  from discord_alerts import send_trade_alert, send_exit_alert, send_health_alert
+
+  # When entering position:
+  send_trade_alert("Will BTC...", "YES", 5.00, 0.65, confidence_score=78)
+
+  # When exiting position:
+  send_exit_alert("Will BTC...", "PROFIT_TAKEN", pnl=125.50, side="YES")
+
+  # When system error:
+  send_health_alert("auto_redeem", "API rate limit exceeded", urgent=True)
+
+================================================================================
+COMMAND REFERENCE
+================================================================================
+
+Configure webhook:
+  python3 /opt/polybot/discord_alerts.py configure WEBHOOK_URL
+
+Test connectivity:
+  python3 /opt/polybot/discord_alerts.py test
+
+Send daily summary (manual):
+  python3 /opt/polybot/discord_alerts.py summary
+
+Check logs:
+  tail -50 /opt/polybot/logs/discord.log
+
+View config:
+  cat /opt/polybot/state/discord_config.json
+
+Verify cron job:
+  crontab -l | grep discord_alerts
+
+================================================================================
+FILES DELIVERED
+================================================================================
+
+1. discord_setup_guide.md
+   → Comprehensive 12-section setup walkthrough
+   → Discord webhook creation steps
+   → Integration examples
+   → Troubleshooting guide
+
+2. DISCORD_DEPLOYMENT_SUMMARY.md
+   → Architecture overview
+   → Feature summary
+   → Production checklist
+   → Full integration reference
+
+3. QUICK_START.txt (this file)
+   → 3-step activation guide
+   → Command reference
+   → Alert types cheat sheet
+
+================================================================================
+DOCUMENTATION LOCATIONS
+================================================================================
+
+Local (your machine):
+  /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/discord_setup_guide.md
+  /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/DISCORD_DEPLOYMENT_SUMMARY.md
+  /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/QUICK_START.txt
+
+VPS Production:
+  /opt/polybot/discord_alerts.py         (main script)
+  /opt/polybot/state/discord_config.json (webhook config)
+  /opt/polybot/logs/discord.log          (alert logs)
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Follow Steps 1-4 above to activate
+2. Review discord_setup_guide.md for detailed walkthrough
+3. Check DISCORD_DEPLOYMENT_SUMMARY.md for architecture & integration
+4. Test with: python3 discord_alerts.py test
+5. Integrate send_trade_alert() into your trading scripts
+6. Monitor logs: tail /opt/polybot/logs/discord.log
+
+================================================================================
+SUPPORT
+================================================================================
+
+Full setup guide: discord_setup_guide.md
+Troubleshooting: See section 10 of discord_setup_guide.md
+Logs: /opt/polybot/logs/discord.log
+Status: ssh -p 2222 root@178.62.225.235 "cat /opt/polybot/state/discord_config.json"
+
+================================================================================
+Deployed: 2026-03-30
+Status: READY FOR ACTIVATION
+Username: geminicap
+VPS: 178.62.225.235:2222
+SSH Key: /sessions/clever-bold-johnson/mnt/CLAUDE/Polymarket/deploy/armorstack_vps_key
+================================================================================

@@ -34,6 +34,7 @@ export class MarketCache {
       taker_fee: market.taker_base_fee,
       minimum_order_size: market.minimum_order_size,
       minimum_tick_size: market.minimum_tick_size,
+      tags: market.tags ?? [],
       last_updated: new Date(),
     };
 

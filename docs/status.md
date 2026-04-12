@@ -1,10 +1,391 @@
 # Polymarket V3 — Live Status
 
-Updated: 2026-04-10 21:05 (end of the deploy + stabilization session — both v3 engines live, clean state)
+Updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
 
-## Both engines LIVE on v3 — rebuild deployed and stable
+## 2026-04-11 session — Phase B SHIPPED in shadow mode + Phase D LlmNewsScout activated (commits `f967642` → `fc18dfd`)
 
-The Opus 4.6 session deployed v3 to the VPS at `/opt/polybot-v3/` (prod) and `/opt/polybot-v3-rd/` (R&D). Both services are **active**, healthy, and running from identical rebuilt `dist/` artifacts. v2 directories are quiesced but preserved for reference until R3c cleanup deletes them.
+### Phase B — DSR/PSR/Brier advisor v2 shadow mode LIVE on prod
+
+**Commits `6035c93` + `fc18dfd`.** Shadow-mode wiring is complete,
+deployed, and firing on every prod advisor cycle. Wilson LB gating
+behavior is UNCHANGED — v2 is observational only until the 7-day A/B
+window closes.
+
+**New files:**
+- `src/validation/returns-series.ts` — loads resolved positions from
+  the R&D DB and converts to per-trade returns (`realized_pnl / cost_basis`)
+  plus binary outcome and entry_price. Drops rows with null cost_basis.
+- `src/risk/advisor-v2-metrics.ts` — `computeAdvisorV2Decision()` wraps
+  PSR/DSR/MinTRL/Brier into a structured decision per (strategy, sub).
+  Thresholds: PSR_ENABLE=0.95, DSR_ENABLE=0.95, PSR_DISABLE=0.05,
+  MIN_RETURNS_FOR_METRICS=30, BRIER_RELIABILITY_WARN=0.05.
+  Uses existing `computeBrier()` from brier.ts (Phase B augment added
+  `reliabilityScalar` + `uncertainty` fields in prior commit).
+
+**Modified:**
+- `src/risk/strategy-advisor.ts` — imports v2 metrics, reads
+  `ADVISOR_V2_ENABLED` env flag at module load, computes v2 decision
+  AFTER Wilson on every pair, logs three-way classification
+  (`agrees` / `disagrees` / `insufficient_data`) with all metrics
+  side-by-side. Errors in v2 path are swallowed to debug-level so they
+  can never break Wilson.
+- `src/validation/walk-forward.ts` — deprecation comment on the old
+  `deflatedSharpeRatio` function pointing at `dsr-psr.ts` as canonical.
+
+**Feature flag setup:**
+- Drop-in file: `/etc/systemd/system/polybot-v3.service.d/advisor-v2.conf`
+  ```
+  [Service]
+  Environment=ADVISOR_V2_ENABLED=true
+  ```
+- Prod: flag ON (shadow mode logs firing, zero behavior change)
+- R&D: flag OFF (R&D doesn't run its own advisor — advisor is prod-side only)
+
+### First production cycle findings (2026-04-11 22:32 UTC)
+
+**Shadow classification breakdown** (sample from first post-deploy cycle):
+- ~65% `insufficient_data` — sub-strategies with <30 resolutions in R&D.
+  This is the majority of pairs (weather subs, crypto subs, sportsbook_fade,
+  cross_market, macro_forecast all have 0-15 trades so far).
+- ~20% `agrees` — longshot systems and favorites.compounding have enough
+  data for both methods and they reach the same conclusion.
+- ~15% `disagrees` — the actually-valuable signal. Over 7 days this
+  accumulates into real methodology-comparison data.
+
+**Architectural decisions locked in this session** (documented in
+`src/risk/advisor-v2-metrics.ts` header):
+1. `dsr-psr.ts` is canonical for new code. `walk-forward.ts`'s DSR
+   deprecated but not removed.
+2. `ADVISOR_V2_ENABLED` defaults OFF everywhere. Opt-in via systemd
+   drop-in per service.
+3. Shadow-only: v2 never overrides Wilson in this phase.
+4. `numCandidates` for DSR = `enabledKeys.size` (currently-active pairs).
+5. Benchmark Sharpe for PSR = 0.0 (vs-zero test). Cash-preservation mode.
+6. Brier reliability drift = log warning only, never auto-disable.
+
+### Analysis plan for the 7-day A/B window
+
+Daily reports should check:
+1. `journalctl -u polybot-v3 --since '24 hours ago' | grep 'classification: "disagrees"' | wc -l` —
+   count of real statistical disagreements
+2. For each disagreement: which action does Wilson pick and v2 pick?
+   Disagreements where v2='enable' and Wilson='keep' are particularly
+   interesting — v2 might be catching edge that win-rate-only misses.
+3. Distribution of `v2_psr` across all passed-filter subs — is it
+   bimodal (clear winners vs clear losers) or unimodal (all inconclusive)?
+4. Brier drift warnings — any sub with `v2_brier_reliability > 0.05` means
+   the calibrator is miscalibrated for that sub.
+
+After 7 days, a follow-up PR will:
+- Promote v2 to a voting role (e.g., require Wilson AND v2 agreement)
+- OR replace Wilson entirely with v2
+- OR add v2 as a third gate in series (Wilson → v2 → existing checks)
+
+Decision deferred to post-window.
+
+### Phase D — LlmNewsScout activated (commit `f967642`)
+
+ANTHROPIC_API_KEY provisioned to both VPS `.env` files via SCP (the
+key never passed through this chat — user wrote to local file, agent
+streamed via stdin to the remote script that populated and chmod'd
+both .env files, then the local file was deleted).
+
+`src/scouts/llm-news-scout.ts` un-stubbed. Now uses:
+- `@anthropic-ai/sdk ^0.67.0` — added to package.json, npm installed
+  on VPS, 6 new packages
+- Model: `claude-haiku-4-5-20251001` (~15× cheaper than Sonnet)
+- Prompt caching via `cache_control: ephemeral` on the system block.
+  Cost budget: ~$5-6/day at 10-min cadence
+- Fire-and-forget async via `void this.runAsync(sample)` so the 60s
+  scout coordinator tick never waits on the API
+- Internal 10-min minimum call interval via `lastCallAt` + `inflightCall`
+  guard to prevent async pileup
+- Semantic validation beyond schema: condition_id whitelist check,
+  reason length ≥20 chars, side/conviction sanity
+- Per-category conviction caps: politics/election 0.60, macro/fed/cpi 0.50,
+  sports 0.70, others global 0.80 floor
+- Fail-closed: empty intel list on any error
+- No price data in the prompt (PolySwarm feedback-loop prevention)
+
+**Verification:** Scout registered in coordinator, no more "ANTHROPIC_API_KEY
+not set" warning. First real API call fires at minute 10 of runtime
+(22:28:44 + 10min = ~22:38:44). Logs will show `LLM news scout tick complete`
+with findings_returned/intel_written/dropped_* counters.
+
+## 2026-04-11 session — Phase A shipped + B/C staged (commits `a2192ff` → `f44cd66`)
+
+**Phase A (defensive hardening) — SHIPPED + VERIFIED live on VPS.** Four
+research-backed fixes applied to existing code paths. Zero new
+strategies, zero new tables, zero new services. Every item tied to a
+primary source in the 6-agent research synthesis.
+
+### A1 — Tail-zone execution-mode override (commit `a2192ff`)
+New helpers in `markov-calibration.ts`: `isDeadBandZone(price)`,
+`preferredExecutionModeForTail(fadePrice)`. `longshot.ts` and
+`favorites.ts` (compounding/near_snipe/stratified_bias subs via
+`buildSignal`) now set `signal.metadata.preferred_execution_mode='taker'`
+when the side being bought is >0.95. In that zone single-sided makers
+collect zero reward score AND eat concentrated adverse selection —
+but the Becker empirical edge still dominates the -1.12% taker cost.
+
+`order-builder.ts` reads the metadata and overrides its default
+entry-maker policy. Verified live: longshot.systematic_fade at
+price 0.968 now routes as `taker`, in_dead_band=1. 51 dead-band
+signals flagged across favorites.fan_fade + longshot subs in a
+10-minute window.
+
+### A2 — Tick-size-weighted pricing + scout scoring (commit `a2192ff`)
+`OrderRequest` type extended with `minimum_tick_size`, populated from
+market-cache by `risk-engine` and threaded into `order-builder` for
+both the maker offset calculation AND the final roundToTick + clamp
+bounds. Previously hardcoded 0.01 meant 10× worse queue position on
+0.001-tick markets.
+
+`scout-base.ts` gains `tickSizePriorityBonus()`: +2 for coarse
+(≥0.1), +1 for standard (0.01), 0 for fine (0.001), -1 for
+ultra-fine. Applied in VolumeSpikeScout, PriceJumpScout, and
+NewListingScout so the attention router implicitly prioritizes
+higher-EV-per-fill markets.
+
+### A3 — Wash-trading penalty (commit `a2192ff` + `b95952f`)
+New module `src/market/wash-trading-penalty.ts`. Two-signal proxy for
+fake volume since we don't subscribe to Polygon logs yet:
+- `churnRatio = volume_24h / max(liquidity, $100)`
+  (>20x mild → 0.8x, >50x high → 0.5x, >100x extreme → 0.3x)
+- High-risk category tags (sports/election/politics/etc.) get an
+  extra 0.7x multiplier per Columbia Nov 2025 findings.
+
+Composite multiplier floored at 0.1. Wired into `position-sizer`
+between the strategy-weighter and the hard caps so it's a
+proportional haircut on suspicious markets — never zeros out.
+
+Follow-up commit `b95952f` added `tags: string[]` field to the
+`MarketData` type and populated it in `market-cache.ts` from the
+`SamplingMarket.tags` field that was already being pulled by the
+sampling-poller.
+
+### A4 — Price-conditioned maker-only gate (commit `a2192ff`)
+`order-builder.ts`:
+- Entries below 25¢ with `preferred_execution_mode='taker'` are now
+  **refused** (returns null). Kalshi 72M-trade analysis shows taker
+  losses average 32% in this zone — not worth any Markov edge.
+- Entries between 25¢-40¢ with taker override get **downgraded** back
+  to maker. Still accept possible no-fill over -1.12% guaranteed tax.
+- Exits bypass both rules (NO-LOSE mantra — if we need out, we need out).
+
+### Phase A verification snapshot (10 min window post-deploy)
+
+| Metric | Value |
+|---|---|
+| Total signals | 1344 |
+| Approved signals | 30 |
+| In dead-band (A1 flagged) | 51 |
+| longshot.systematic_fade dead-band | 25 |
+| longshot.bucketed_fade dead-band | 21 |
+| favorites.fan_fade dead-band | 5 |
+| Errors across both engines | 0 |
+
+Stratified_bias gets the most rejections because it's in the noisy
+45-55¢ zone where the wash-trading penalty can reduce size below the
+dust floor. Expected behavior.
+
+### Phase B — STAGED (commit `bd6860d`)
+
+Two new validation modules committed + typechecked + built into dist,
+but NOT imported anywhere yet. They will be wired into the
+StrategyAdvisor in a follow-up session after Phase A's 24h
+verification gate clears.
+
+- `src/validation/stats-helpers.ts` — shared `normalCdf`, `sampleMean`,
+  `sampleVariance`, `sampleStd`, `sampleSkew`, `sampleKurtosis`,
+  `sharpeRatio`, `EULER_MASCHERONI`. Abramowitz & Stegun 26.2.17
+  rational approximation for Φ(x) (max error ~7.5e-8).
+
+- `src/validation/dsr-psr.ts` — `probabilisticSharpeRatio` (PSR),
+  `minimumTrackRecordLength` (MinTRL), `expectedMaxSharpeUnderNull`,
+  and a raw-returns-taking `deflatedSharpeRatio` returning a
+  `DsrResult` shape with sharpe/benchmark/dsr/n/skew/kurtosis.
+
+- `src/validation/brier.ts` augmented with `reliabilityScalar` and
+  `uncertainty` fields to complete the Murphy 1973 decomposition
+  identity: `score ≈ reliabilityScalar - resolution + uncertainty`.
+
+Note: `walk-forward.ts` already has a `deflatedSharpeRatio` from an
+earlier R2 PR. The new `dsr-psr.ts` is the successor with three
+improvements: takes raw returns (not pre-computed moments), adds PSR
++ MinTRL, uses shared stats-helpers.ts numerics. The walk-forward
+version is kept for backward compat.
+
+### Phase C — STAGED (commit `f44cd66`)
+
+`src/scouts/leaderboard-poller-scout.ts` — scaffolds the highest-leverage
+whale detection signal from the research synthesis. Polls
+`data-api.polymarket.com/leaderboards?window=week` every 10 minutes
+(fire-and-forget async inside the 60s scout tick; errors swallowed to
+logs so they never halt other scouts). Parses the raw JSON into typed
+`LeaderboardEntry` objects sorted by weekly profit.
+
+Currently logs-only. Three follow-up items needed to activate:
+- **C1a** — CREATE TABLE `smart_money_candidates` + migration
+- **C1b** — `upsertCandidate()` in a new `smart-money-repo.ts`
+- **C1c** — register the scout in `scout-coordinator.registerDefaultScouts()`
+           and add a `scouts.disabled_scouts` opt-out
+
+Not yet imported or registered. Committed for review + typecheck.
+
+### Phases D-G — BLOCKED
+
+- **D** blocked on `ANTHROPIC_API_KEY` provisioning on the VPS
+- **E** blocked on Dale manual watching for the $1 mainnet test
+- **F** blocked on Phase B advisor-v2 7-day A/B window
+- **G** blocked on 2+ weeks of Phase C reward-farming scout data
+
+## 2026-04-11 session — attention router + scout fleet (commits `e5d951f` → `9e3c53a`)
+
+**Four-phase build shipped in one session.** This is the big one — it
+unlocks faster reaction time (30s vs 5m) on scout-flagged markets, adds
+qualitative overlays on top of the statistical edge, and closes the
+silently-broken R&D→prod advisor feedback loop. All four phases deployed
+to prod + R&D, both engines healthy, zero errors in 6+ min uptime.
+
+### Phase 1 — Advisor fix (`e5d951f`)
+**Discovery**: the yaml was missing the `advisor:` block entirely. Schema
+default is `enabled: false`, which meant prod's StrategyAdvisor had been
+silently disabled — prod had no R&D→prod feedback loop at all. Added
+`advisor.enabled: true` + `check_interval_ms: 300000` (5 min, was 30 min
+default) + `protected_strategies: [weather_forecast, crypto_price]`.
+Advisor now fires its first check 10 seconds after startup and every
+5 minutes thereafter. Confirmed live: `Running strategy advisor check`
+logged at 19:37:22.
+
+### Phase 2 — Attention Router (`e5d951f`)
+New `market_priorities` table + `PriorityScanner` service. Scouts
+write rows saying "scan this market NOW" and the scanner polls every
+30 seconds, runs a scoped version of the scan cycle on just those
+markets, and feeds signals into the normal risk + execution pipeline.
+Out-of-cycle reaction time: 30s instead of 5m. New yaml block
+`priority_scanner:` in both engine configs.
+
+### Phase 3 — Scout Overlay (`e5d951f`)
+New `scout_intel` table + `scout-overlay.ts` module. Scouts write
+qualitative intel ("market X, side Y, conviction Z, reason ..."),
+strategies call `applyScoutOverlay()` during signal build. The overlay
+multiplies `recommended_size_usd` by:
+- **1.0 → 1.25x** on agreement, scaled by conviction
+- **1.0 → 0.50x** on disagreement, scaled by conviction
+- **1.0** (no-op) on neutral intel or low conviction (<0.60)
+
+Integrated into favorites (4 subs), longshot (3 subs), convergence
+(2 subs). Overlay cannot CREATE signals — only weights existing ones.
+Risk engine caps remain the final gate. Layered multiplicatively with
+the Becker longshot-bias multiplier in longshot strategies.
+
+### Phase 4 — Scout Fleet (`9e3c53a`)
+Four in-process scouts run on a 60-second shared timer inside the
+engine process (not separate systemd services). Shared market cache
+access = no DB round trips; sliding-window state lives in scout memory.
+
+1. **VolumeSpikeScout** — flags markets with ≥3x volume growth in a
+   5-min window. Priority 6-10 by magnitude. Noise floor: $5K volume.
+2. **PriceJumpScout** — flags markets with ≥5% mid-price moves in
+   5 min. Priority 6-10 by magnitude. Min liquidity $1K.
+3. **NewListingScout** — flags newly-appeared markets with ≥$500
+   liquidity. Seeded 1045 markets on first tick (confirmed in logs).
+   Priority 7, 15-min TTL.
+4. **LlmNewsScout** — stub that fails closed without `ANTHROPIC_API_KEY`.
+   When key lands, un-stub `callClaude()` in `src/scouts/llm-news-scout.ts`
+   and add `@anthropic-ai/sdk` dependency. Writes both scout_intel
+   (side + conviction capped at 0.80) and market_priorities rows.
+
+All scouts registered via `ScoutCoordinator.start()`. Config block
+`scouts:` in both yamls, `disabled_scouts` array for turning individual
+scouts off without code changes.
+
+### Verification
+- Typecheck clean (3 rounds, minor import fixes needed on round 1)
+- Build clean
+- Both engines restarted cleanly at 19:43:02 / 19:42:59
+- All 4 scouts registered in coordinator logs on both engines
+- PriorityScanner running on both engines
+- Advisor enabled on prod
+- LLM news scout correctly reports dormant with ANTHROPIC_API_KEY missing
+- NewListingScout seeded 1045 markets on its first tick (R&D, 19:44:00)
+- Zero errors in 6+ min of runtime across both engines
+
+### Open items
+- **ANTHROPIC_API_KEY provisioning** — Dale needs to add this to
+  `/opt/polybot-v3/.env` and `/opt/polybot-v3-rd/.env` on the VPS to
+  activate the LLM news scout. Un-stub `callClaude()` in the scout.
+- **Scout flagging verification** — scouts log silently when they
+  find nothing (by design). Real flagging events will appear in logs
+  the first time an actual volume spike / price jump occurs. Monitor
+  over next 24h: `journalctl -u polybot-v3-rd --since '1 hour ago' |
+  grep -iE 'spike|jump|flagged'`.
+
+## 2026-04-11 session — prod parity patch (commit `0249404`)
+
+**Ensured prod has all the calibration brains it needs.** Wired the Markov
+empirical grid into `favorites.ts` (compounding, near_snipe, stratified_bias,
+fan_fade) and `convergence.ts` (filtered_high_prob, long_term_grind). These
+strategies now have the same 3-step probability fallback chain `longshot.ts`
+already had:
+
+1. **Own-data baseRateCalibrator** — Wilson LB from our own resolutions
+2. **Markov empirical grid** — Becker 72.1M-trade industry calibration (new)
+3. **Naive heuristic** — last resort, should almost never fire
+
+Added side-aware `calibratedSideProb(price, side)` helper in
+`src/market/markov-calibration.ts` that handles YES/NO symmetry so favorites
+and fan_fade can consume it regardless of which side they're betting.
+
+### Signal audit post-deploy (15-min window)
+
+| Strategy | Sub | Signals | Approved | Avg edge | Source |
+|---|---|---|---|---|---|
+| favorites | compounding | 816 | 3 | +0.80pp | Markov |
+| favorites | stratified_bias | 320 | 0 | +0.24pp | Markov |
+| favorites | fan_fade | 82 | 0 | −1.16pp | Markov |
+| convergence | long_term_grind | 327 | 0 | **−97pp** | own-data |
+| convergence | long_term_grind | 139 | 0 | +0.85pp | Markov |
+
+### Findings from signal audit
+
+- **Prod has 244 total resolutions** across 12 sub-strategies (not zero as
+  previously assumed). Top buckets: convergence.long_term_grind (81),
+  favorites.compounding (56), longshot subs (~60 combined), weather_forecast (12).
+- **Own-data calibrator now firing for prod** in price buckets with ≥10
+  resolutions. Markov fills the gap for buckets below the threshold.
+- **`convergence.long_term_grind` is a losing strategy per prod's own data** —
+  327 signals in 15 min with avg edge −97pp. Wilson LB on resolved positions
+  is far below market price. All signals being rejected at min_edge gate.
+  StrategyAdvisor should catch this and disable the sub on next run (10 min).
+- **Signal volume collapsed toward high-edge strategies** — before this patch,
+  strategies fired on naive `price + constant` heuristics. After, only
+  near_snipe / filtered_high_prob / longshot / weather / crypto / signal-feed
+  strategies will reliably clear the 1.5% min_edge gate. Exactly the tightening
+  Dale wanted.
+
+## 2026-04-11 session — 4 phases shipped
+
+All deployed to VPS (commits through `3ab1825`), prod + R&D restarted:
+
+1. **R&D dist drift cleanup** — discovered R&D was never running stale code. The `/opt/polybot-v3-rd/dist/` was orphaned artifacts; R&D's systemd `ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js` always pointed at prod's dist. Deleted the orphan dir. Verified via `/proc/<pid>/cmdline`.
+2. **Maker/taker hybrid execution** (commit `db687ca`) — entries now post as passive makers (1 tick better than market), exits remain takers. Added `execution_mode: 'maker' | 'taker'` to `Order` interface. Paper simulator enforces fill gating: maker orders only fill if book crossed us. Expected capture: 2.24pp per trade swing vs pre-fix taker pricing (Becker's 72.1M-trade study finding).
+3. **Markov empirical calibration** (commits `031d734` + `3ab1825`) — new `src/market/markov-calibration.ts` with empirical YES-resolution grid from Becker study. Longshot strategy now uses 3-step probability fallback: (1) Wilson LB from own resolved fades, (2) Markov empirical grid, (3) naive heuristic. Base size now multiplied by `longshotBiasMultiplier(price, side)` to shrink YES / grow NO in <20¢ zone.
+4. **Research-capture pipeline** — new `scripts/skills/SKILL-template.md` + `scripts/skills/capture-research.sh` wrapper. Retroactively captured Becker findings to `_Skills-staging/research-captured/skills/polymarket-markov-empirical-edges/SKILL.md` and deployed via `install-skills.sh --execute --source research-captured`. Active skill count now 1050.
+
+### Phase 5 + 6 research (no code impact)
+- **`dylanpersonguy/Polymarket-Trading-Bot`** — verified does NOT exist. Hallucinated metadata in search results.
+- **`echandsome/Polymarket-betting-bot`** — skimmed. No market-making, no inventory management. Only worthwhile artifact: `tradeMonitor.ts` receipt-parsing + WebSocket block-subscription pattern for whale tracking. Note for future whale-tracker work. **Verdict: skim complete, no deep-dive.**
+- **`evan-kolberg/prediction-market-backtesting`** — scoped. 522 stars, active daily, NautilusTrader fork with PMXT L2 historical data. Decision memo at `docs/backtesting-scoping-2026-04-11.md`. **Recommendation: Option B (Python sidecar) deferred until R2 clears.** License mixed (MIT root + LGPL adapter), subprocess boundary avoids linking obligations.
+
+## Prior state (unchanged, for reference)
+
+## Both engines LIVE on v3 — full cleanup + hardening applied
+
+v3 is now the ONLY polybot code on the VPS. All v1/v2 directories deleted, credentials
+migrated to v3 paths, systemd autostart enabled, security updates applied, plaintext
+API keys removed from root crontab, and the unused win11-vm SSH key removed.
 
 - **VPS `polybot-v3.service`** — LIVE, prod, port 9100, dashboard at https://sageadvisors.ai, mode=live
 - **VPS `polybot-v3-rd.service`** — LIVE, R&D, port 9200, dashboard at https://rd.sageadvisors.ai/rd, mode=paper, `BASE_PATH=/rd`

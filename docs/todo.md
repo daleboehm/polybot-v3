@@ -1,10 +1,255 @@
 # Polymarket V3 — TODO
 
-Updated: 2026-04-10 21:10 (end of deploy + stabilization session)
+Updated: 2026-04-11 (whale-tracking pipeline built + dormant, reviewable tomorrow)
+
+## WHALE ACTIVATION PLAYBOOK — built 2026-04-11, dormant until flipped
+
+**Status:** Every piece of the whale-tracking pipeline is BUILT, COMMITTED,
+TYPECHECKED, BUILT into dist, and LOADED into the engine — but held
+behind four independent feature gates. Flipping any single gate does
+nothing. You have to flip all four (in order) to activate. This is
+intentional belt-and-suspenders.
+
+### What's built and where it lives
+
+| Component | Path | Purpose |
+|---|---|---|
+| Schema tables | `src/storage/schema.ts` | `smart_money_candidates`, `whitelisted_whales`, `whale_trades` |
+| Repository | `src/storage/repositories/smart-money-repo.ts` | upsert / promote / dedup / query |
+| Leaderboard poller | `src/scouts/leaderboard-poller-scout.ts` | 10-min polls of `data-api.polymarket.com/leaderboards` |
+| Scout registration | `src/scouts/scout-coordinator.ts` | Registered but default-disabled via yaml |
+| Filter CLI | `src/cli/index.ts` → `polybot smart-money-filter` | Applies Bravado 4-threshold, promotes survivors |
+| Manual seed CLI | `src/cli/index.ts` → `polybot whale-seed` | Bootstrap before filter has data |
+| Log subscriber | `src/market/whale-event-subscriber.ts` | 60-sec Polygon log polls for OrderFilled events |
+| Strategy | `src/strategy/custom/whale-copy.ts` | Mirror signals via standard risk/exec pipeline |
+| Strategy registration | `src/core/engine.ts` | Registered but `shouldRun()` gated on env flag |
+| Entity config guard | `config/entities.yaml` | `whale_copy` commented out of prod strategies |
+
+### The four feature gates (flip ALL FOUR, in order, to activate)
+
+**Gate 1 — Enable the leaderboard poller scout.**
+```yaml
+# /opt/polybot-v3/config/default.yaml  (and /opt/polybot-v3-rd/config/rd-default.yaml)
+scouts:
+  disabled_scouts: []   # REMOVE 'leaderboard-poller-scout'
+```
+This turns on the 10-min poll loop. Run for at least 30 min to accumulate candidate data.
+Verify: `sqlite3 /opt/polybot-v3/data/polybot.db 'SELECT COUNT(*) FROM smart_money_candidates;'` should be > 0.
+
+**Gate 2 — Bootstrap at least one whale.**
+Two options:
+```bash
+# Option A: seed Fredi9999 (known 2024-election whale from research)
+node /opt/polybot-v3/dist/cli/index.js whale-seed \
+  --wallet 0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf \
+  --name Fredi9999 \
+  --reason "2024-election research, Cointelegraph + Protos documented"
+
+# Option B: run the filter job after the poller has accumulated data
+# (requires at least some candidates with n >= 200 settled)
+node /opt/polybot-v3/dist/cli/index.js smart-money-filter --dry-run
+# Review output, then rerun without --dry-run
+node /opt/polybot-v3/dist/cli/index.js smart-money-filter
+```
+Verify: `sqlite3 /opt/polybot-v3/data/polybot.db 'SELECT * FROM whitelisted_whales;'` should return ≥1 row.
+
+**Gate 3 — Enable the whale-copy strategy in the entity config.**
+```yaml
+# /opt/polybot-v3/config/entities.yaml
+  - slug: polybot
+    strategies:
+      - weather_forecast
+      # ... existing strategies ...
+      - whale_copy   # UNCOMMENT THIS
+```
+
+**Gate 4 — Set the environment flag and restart.**
+```bash
+# Add to /opt/polybot-v3/.env (prod only — or both for R&D paper validation)
+echo 'WHALE_COPY_ENABLED=true' >> /opt/polybot-v3/.env
+
+# Restart the engine
+systemctl restart polybot-v3
+```
+Verify within 2 minutes after restart:
+```bash
+# Should see "Whale event subscriber starting" once whales exist
+journalctl -u polybot-v3 --since '2 min ago' | grep -i 'whale'
+```
+
+### Recommended activation sequence (safest)
+
+1. **Flip Gate 1 only** on both prod + R&D. Let it run overnight. Tomorrow
+   review the candidates table to see what kind of wallets the leaderboard
+   API surfaces. If the data looks thin or suspect, STOP — don't proceed.
+2. **Flip Gate 2 manually** with Fredi9999 as the only whale. This is the
+   highest-confidence seed wallet from the research. Don't run the
+   filter job yet — that requires 3+ days of candidate accumulation to
+   have anything to evaluate.
+3. **Flip Gates 3 + 4 ON R&D FIRST.** R&D runs paper mode, so every
+   whale-copy signal becomes a paper trade. Watch for 3-5 days to see
+   if the strategy generates ANY signals at all (the condition_id
+   resolution issue in WhaleEventSubscriber may require a follow-up
+   fix before signals fire — see "Known limitations" below).
+4. **If R&D paper shows positive P&L over 5 days**, flip Gates 3 + 4
+   on prod with `copy_multiplier: 0.5` on the whale to halve the size
+   relative to R&D. Watch for 7 days. If positive, raise to 1.0.
+5. **If R&D paper shows zero signals or negative P&L**, go back to
+   Gate 2 and either (a) seed a different whale, or (b) fix the
+   condition_id resolution issue in WhaleEventSubscriber.
+
+### Known limitations (documented in the code)
+
+1. **condition_id resolution**: `WhaleEventSubscriber` writes `whale_trades`
+   rows with `condition_id = ''` because it can't derive the Polymarket
+   market ID from raw `OrderFilled` event args alone. The `WhaleCopyStrategy`
+   currently skips those rows with `skipped_other: condition_id unresolved`.
+   Fix: add a CLOB `/markets/{asset_id}` lookup in the subscriber's
+   event handler. Estimated 1 hour of work. See the inline TODO in
+   `src/market/whale-event-subscriber.ts`.
+
+2. **Only OrderFilled events**: the subscriber parses OrderFilled but
+   not PositionSplit/PositionsMerge/PositionsConverted. Those are
+   position-management events that indicate a whale moved inventory
+   without a market trade. Phase 2a doesn't handle them. Fix: add
+   ABIs for the other three events and parallel `getLogs` queries.
+
+3. **Public RPC rate limits**: the subscriber polls getLogs every 60s
+   across 2 contracts for up to 1000 blocks at a time. On a flaky
+   public RPC (polygon-rpc.com) this can fail. The RPC rotation is
+   built in but only handles transient failures, not sustained
+   rate-limiting. Eventually we want a dedicated RPC endpoint (Alchemy,
+   Infura, QuickNode — ~\$50/mo for our volume).
+
+4. **Filter CLI not wired to a systemd timer**: operator must run
+   `polybot smart-money-filter` manually (or add their own cron entry).
+   This is intentional for v1 because the filter decision is high-stakes
+   (promotes a wallet to auto-copy). Future: add optional systemd timer
+   once the filter has been run manually for 2+ weeks and the output
+   looks trustworthy.
+
+### Cost projection
+
+**Leaderboard poller** (Gate 1 only): 1 HTTP call every 10 min = 144/day.
+`data-api.polymarket.com` is free, no cost.
+
+**Whale subscriber** (Gates 1-4): 2 getLogs calls every 60 sec to 2
+contracts = 2880/day to free public RPCs. Could exhaust rate limits in
+sustained use; plan for paid RPC at ~\$50/mo if this goes past a week.
+
+**Whale-copy strategy**: 0 additional cost beyond existing scan/risk/exec
+pipeline.
+
+### Emergency disable
+
+If anything goes wrong after activation:
+```bash
+# Fastest path: kill the env flag, restart.
+sed -i '/WHALE_COPY_ENABLED/d' /opt/polybot-v3/.env
+systemctl restart polybot-v3
+# Whale strategy goes dormant immediately. Existing whale-copy positions
+# stay open and resolve normally. Subscriber stops polling.
+```
+
+### Review before activation (tomorrow's session)
+
+1. Read `config/default.yaml` scouts block + `config/entities.yaml`
+   polybot strategies + `src/strategy/custom/whale-copy.ts` shouldRun()
+2. Confirm the decision matrix in the playbook makes sense for current
+   prod state
+3. Decide: Gate 1 only (safest), or Gate 1+2 (slightly more committed)
+4. Execute the chosen flip sequence
+
+---
+
+## 48-HOUR REVIEW TRIGGER — 2026-04-13 or later
+
+**longshot.bucketed_fade protection review.** Added to
+`config/default.yaml` `advisor.protected_strategies` on 2026-04-11 as
+Option B from the advisor-investigation pass. Decision was:
+
+- R&D data said n=59, 76.3% WR, -$15.49 pnl — classic high-WR
+  Sharpe-negative pattern that Wilson doesn't catch but DSR/PSR would
+- Prod had zero clean data at the time (all resolutions were
+  reconciler-zero-P&L artifacts, fix just landed)
+- bucketed_fade was landing 7 of prod's last 30-min fills — it was
+  the primary order-flow producer, couldn't afford to kill it
+- Added as protected to prevent any future advisor logic change from
+  auto-disabling it before we have real prod data
+
+**When to review (any of):**
+1. Prod's `v_strategy_performance` shows n>=30 resolutions for
+   `longshot.bucketed_fade` with real P&L (not reconciler zeros)
+2. 48 hours elapsed since 2026-04-11 ~23:45 UTC (so 2026-04-13 23:45 UTC)
+3. Prod equity has dropped by more than $10 and we need to reassess
+   whether bucketed_fade is contributing to the bleed
+
+**How to review:**
+```sql
+SELECT strategy_id, sub_strategy_id, total_resolutions, wins, losses,
+       ROUND(win_rate, 1), ROUND(total_pnl, 2)
+FROM v_strategy_performance
+WHERE strategy_id = 'longshot' AND sub_strategy_id = 'bucketed_fade';
+```
+
+**Decision matrix:**
+- n<30: not enough prod data, extend protection another 48h
+- n>=30, WR>=60%, pnl>=0: remove from protected_strategies, let advisor manage
+- n>=30, WR>=60%, pnl<0: KEEP protected (Sharpe-negative pattern confirmed
+  on prod, but advisor can't see it). Plan a Phase B follow-up to wire
+  DSR/PSR into a voting role.
+- n>=30, WR<50%: remove protection AND explicitly exclude via
+  `sub_strategy_ids` in entities.yaml (same pattern as stratified_bias)
 
 ## NEXT SESSION — START HERE
 
-### Top priority for next session
+### Today's verification tasks (first 15 min of next session)
+
+**0a. Phase A 24h gate — CRITICAL BEFORE Phase B activation.** After 24h of
+runtime with Phase A live (commits a2192ff + b95952f), check:
+- `v_strategy_performance` approval rates BEFORE vs AFTER a2192ff — no
+  strategy should have dropped by more than its normal variation.
+  Expected: longshot and favorites.near_snipe see lower approval rates
+  (they're eating the A1 taker routing and the A3 churn haircut).
+- `sqlite3 rd.db "SELECT strategy_id, sub_strategy_id, COUNT(*), SUM(CASE WHEN approved=1 THEN 1 ELSE 0 END) FROM signals WHERE created_at >= datetime('now','-24 hours') GROUP BY strategy_id, sub_strategy_id;"`
+- `journalctl -u polybot-v3-rd --since '24 hours ago' | grep -c 'A4 gate'` —
+  count of A4 refusals. Zero is fine (few signals below 25¢); high count
+  means the A1 taker routing is too aggressive.
+- `sqlite3 rd.db "SELECT AVG(CASE WHEN json_extract(metadata,'$.in_dead_band')=1 THEN 1.0 ELSE 0.0 END) FROM signals WHERE created_at >= datetime('now','-24 hours');"` —
+  fraction of signals in dead-band zone. Should be 2-5%.
+- No new errors in journalctl since a2192ff deploy time.
+
+**If 0a passes:** proceed with Phase B activation — wire dsr-psr.ts + brier
+decomposition into the StrategyAdvisor behind an `ADVISOR_V2_ENABLED`
+feature flag. Run 7-day A/B against the existing Wilson LB gating.
+
+**If 0a fails:** identify the regressing strategy, narrow the A1/A3/A4
+rule that caused it, and ship a fix before Phase B.
+
+0. **Scout fleet signal review** — the big new thing from the prior session. After 24h+ of runtime check:
+   - `journalctl -u polybot-v3-rd --since '1 hour ago' | grep -iE 'spike|jump|flagged|Scout tick'` — confirm scouts are firing real findings
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*), MAX(priority), MIN(created_at), MAX(created_at) FROM market_priorities GROUP BY created_by;'` — priority rows per scout
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT created_by, COUNT(*) FROM scout_intel GROUP BY created_by;'` — qualitative intel rows
+   - `sqlite3 /opt/polybot-v3-rd/data/rd.db 'SELECT COUNT(*) FROM signals WHERE metadata LIKE "%scout_overlay%" AND json_extract(metadata, "$.scout_overlay_multiplier") != 1.0;'` — signals where overlay actually shifted size
+   - `journalctl -u polybot-v3-rd --since '1 hour ago' | grep -iE 'Priority scan complete'` — how often the priority scanner fired
+   - **If zero scout activity after 24h**: probably a market-data / marketCache issue. Check `sampling-poller` logs for volume_24h refresh errors.
+
+0b. **Verify advisor fired on prod** — the yaml fix re-enabled the advisor. Check:
+   - `journalctl -u polybot-v3 --since '1 hour ago' | grep -iE 'strategy advisor'` — should see periodic 5-min checks
+   - Verify `convergence.long_term_grind` got disabled (it was producing −97pp avg edge per prior session notes)
+
+0c. **Activate LlmNewsScout** — requires `ANTHROPIC_API_KEY` on the VPS and un-stubbing `callClaude()` in `src/scouts/llm-news-scout.ts`. Takes ~1-2 hours once key is available. Add `@anthropic-ai/sdk` to package.json.
+
+1. **Check maker/taker fill rates** — query `v_strategy_performance` or logs for:
+   - Count of orders where `execution_mode='maker'` that actually filled vs timed out
+   - Compare entry fill price vs market price at scan time (should average +0.01 better than before db687ca)
+   - If fill rate <50% over 24h, consider shrinking the 1-tick delta or switching specific strategies back to taker
+2. **Verify Markov longshot signals** — query recent longshot signals where `metadata.bias_multiplier != 1.0`. Confirm YES-side <20¢ signals are being sized down and NO-side signals sized up.
+3. **Check `markov-calibration.ts` didn't break anything** — look for any edge-report logs showing NaN or unexpected probabilities.
+4. **Check advisor disabled `convergence.long_term_grind` on prod** — the patch exposed that prod's 81 own-data resolutions for this sub are producing avg edge −97pp on new signals. Advisor runs every 10 min with Wilson LB gating. Verify it has disabled the sub by the time the next session starts. If NOT disabled, check advisor config thresholds — something is likely blocking the disable path.
+5. **Check prod signal volume per sub** — after the Markov patch (`0249404`), prod's signal-generation profile should tighten dramatically toward strategies with actual edge (near_snipe, filtered_high_prob, longshot.*, weather, crypto, sportsbook_fade, cross_market, macro_forecast). Strategies with tautological pre-patch fallbacks (compounding, stratified_bias, fan_fade at mid-price, long_term_grind) should see very few approvals at the 1.5% min_edge gate. If any of those subs are still approving >5% of signals, debug the Markov wiring.
+
+### Top priority for next session (from 2026-04-10, still relevant)
 
 1. **Private GitHub repo for polybot-v3** — single source of truth across workstation / VPS src / VPS dist. Ends hot-patch drift forever. ~30-45 min setup:
    - `git init` in `Polymarket/polybot-v3/`
@@ -29,10 +274,12 @@ Updated: 2026-04-10 21:10 (end of deploy + stabilization session)
 
 ## Deploy discipline (LOCKED-IN, do not deviate)
 
+- **STANDING RULE (Dale 2026-04-11):** No patches. Only code updates. No rsync drift-plastering. No ad-hoc SQL updates. Every fix flows: workstation src edit → git commit → GitHub push → VPS git pull → `npm run build` → `systemctl restart`.
 - Workstation `Polymarket/polybot-v3/src/` is THE source of truth
-- NEVER hot-patch `/opt/polybot-v3/dist/` directly. If you must (emergency), update workstation src and scp in the SAME session.
-- Flow: edit workstation → scp to VPS src → `npm run build` on VPS → `rsync -a --delete /opt/polybot-v3/dist/ /opt/polybot-v3-rd/dist/` → `systemctl restart polybot-v3 polybot-v3-rd` → verify
-- Doc: `Polymarket/docs/deploy.md`
+- NEVER hot-patch `/opt/polybot-v3/dist/` directly. If you must (emergency), update workstation src and git commit + push in the SAME session.
+- **R&D does NOT have its own dist.** `polybot-v3-rd.service` uses `ExecStart=/usr/bin/node /opt/polybot-v3/dist/index.js` with `WorkingDirectory=/opt/polybot-v3-rd`. One rebuild = both engines updated. No rsync step needed. Verified 2026-04-11.
+- Flow: edit workstation → git commit + push → VPS `git pull` → `npm run build` → `systemctl restart polybot-v3 polybot-v3-rd` → verify
+- Doc: `polybot-v3/docs/deploy.md`
 
 ## Both engines currently LIVE (as of 2026-04-10 21:05)
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Polybot V3 UMA dispute watcher (R&D) — hourly staggered
+Requires=polybot-v3-rd-uma-watch.service
+
+[Timer]
+# Start R&D 25 minutes after prod's boot offset (prod OnBootSec=10m)
+# so the two watchers never hit Gamma in the same minute.
+OnBootSec=35min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=3min
+Unit=polybot-v3-rd-uma-watch.service
+
+[Install]
+WantedBy=timers.target

@@ -232,3 +232,13 @@ No exceptions. Audit every strategy in `src/strategy/custom/` after adding a new
 3. Dynamic-import dependencies at activation time so the scaffold doesn't pull unused npm deps
 4. Document what the operator has to do to activate (environment variables, VPS runbook steps, initial capital requirement) in the file header
 5. When the scaffold is activated in a future session, the diff is small and obvious — swap the throw for real logic, flip a feature flag, add the dependency to package.json.
+
+### Lesson: Every long-lived server accumulates "legacy ballast" — hunt it before it accumulates.
+
+**What happened (2026-04-10 evening cleanup pass)**: The VPS had 31 GB of v1 Python legacy at `/opt/polybot/` (mostly old market cache files + backups), 286 MB at `/opt/polybot-v2/`, 119 MB at `/opt/polybot-v2-rd/`, and ~15 small `/opt/{entity}/` directories with encrypted wallet stubs from a never-activated multi-entity setup. Each piece had a good reason to exist at the time — but all together they made the system harder to reason about and introduced latent reference risks (e.g., `config/entities.yaml` still pointed `entity_path: /opt/polybot` and the runtime depended on a symlink chain through v1 directories). Also found: plaintext API keys (`FRED_API_KEY`, `ODDS_API_KEY`, `METACULUS_TOKEN`) still sitting in the root crontab from a previous era even though they'd been moved to `/opt/polybot-v3/.env` weeks earlier.
+
+**Rule**: When you migrate a feature from v1 → v2 → v3, don't just stop calling the old code — delete it. If the old code contains secrets or touches sensitive paths, migrate the secrets first (to a new location that matches the new naming), then delete the old code AND its secret locations. "I'll clean it up later" never happens.
+
+**Why**: Legacy ballast is not neutral. It grows audit scope, it hides latent runtime dependencies (like the `/opt/polybot` symlink chain), it gives attackers more attack surface, and it makes every future "what does this do?" question take longer to answer.
+
+**How to apply**: Any session that ships a v1 → v2 migration (or similar) MUST include a deletion commit in the same session OR a dated deletion reminder in `todo.md`. The deletion reminder must include: (1) file paths to remove, (2) any secret/credential relocation prerequisites, (3) a systemd/cron survey to catch auto-start references before the deletion. The rebuild plan's R3c cleanup gate exists for exactly this reason — don't defer it into the grave.

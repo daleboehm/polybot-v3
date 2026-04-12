@@ -20,7 +20,13 @@ export interface BrierResult {
   meanOutcome: number;    // average realized outcome (0 = loss, 1 = win)
   reliability: ReliabilityBucket[];
   calibrationError: number; // weighted mean |predicted - actual| across buckets
-  resolution: number;      // Brier decomposition: uncertainty about the base rate
+  resolution: number;      // Brier decomposition: discrimination power (higher = better)
+  // Phase B (2026-04-11): full Murphy 1973 decomposition adds the uncertainty
+  // term so we can verify the identity `score ≈ reliabilityScalar - resolution + uncertainty`.
+  // - reliabilityScalar: sum_i w_i * (avgPred_i - obsRate_i)^2 — the calibration gap as a single number
+  // - uncertainty: p̄(1-p̄) where p̄ is the observed base rate — irreducible noise
+  reliabilityScalar: number;
+  uncertainty: number;
 }
 
 export interface ReliabilityBucket {
@@ -51,6 +57,7 @@ export function computeBrier(predictions: Prediction[], bucketCount = 10): Brier
     return {
       score: 0, n: 0, meanPrediction: 0, meanOutcome: 0,
       reliability: [], calibrationError: 0, resolution: 0,
+      reliabilityScalar: 0, uncertainty: 0,
     };
   }
 
@@ -117,18 +124,34 @@ export function computeBrier(predictions: Prediction[], bucketCount = 10): Brier
   }
   if (weightSum > 0) calibrationError /= weightSum;
 
-  // Resolution (Brier decomposition): uncertainty about the base rate
-  // resolution = sum(w_i * (mean_actual_i - mean_outcome)^2)
+  // Full Murphy 1973 Brier decomposition:
+  //   score ≈ reliabilityScalar - resolution + uncertainty
+  //
+  // resolution = Σ w_i * (obsRate_i - baseRate)^2
+  //   Higher resolution = the strategy's confidence buckets actually
+  //   differentiate winners from losers.
+  //
+  // reliabilityScalar = Σ w_i * (avgPred_i - obsRate_i)^2
+  //   The squared calibration gap. 0 = perfectly calibrated. This is a
+  //   stricter metric than calibrationError (which is |gap|, not gap^2)
+  //   and is the term that actually appears in the Brier decomposition.
+  //
+  // uncertainty = p̄(1 - p̄)
+  //   The irreducible outcome noise given the base rate. You would get
+  //   `uncertainty` as your Brier score by always predicting p̄.
   let resolution = 0;
+  let reliabilityScalar = 0;
   for (const b of buckets) {
     if (b.n > 0) {
       const w = b.n / n;
       resolution += w * (b.meanActual - meanOutcome) ** 2;
+      reliabilityScalar += w * (b.meanPredicted - b.meanActual) ** 2;
     }
   }
+  const uncertainty = meanOutcome * (1 - meanOutcome);
 
   return {
     score, n, meanPrediction, meanOutcome, reliability: buckets,
-    calibrationError, resolution,
+    calibrationError, resolution, reliabilityScalar, uncertainty,
   };
 }

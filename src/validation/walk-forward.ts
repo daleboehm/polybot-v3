@@ -142,6 +142,14 @@ export function runWalkForward(
  * @param n length of the return series
  * @param skewness skewness of the return distribution (default 0 = normal)
  * @param kurtosis excess kurtosis (default 0 = normal, not 3)
+ *
+ * @deprecated Phase B (2026-04-11): new code should import from
+ * `src/validation/dsr-psr.ts` instead. That module takes raw returns
+ * (this one takes pre-computed Sharpe + moments), adds PSR and
+ * Minimum Track Record Length helpers, and uses the shared
+ * stats-helpers.ts numerics. This function is preserved for backward
+ * compatibility with any existing callers in walk-forward.ts itself;
+ * no new code should call it.
  */
 export function deflatedSharpeRatio(
   observedSharpe: number,

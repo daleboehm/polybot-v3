@@ -19,6 +19,8 @@ import { OnChainReconciler } from '../market/on-chain-reconciler.js';
 import { PortfolioRiskTracker } from '../risk/portfolio-risk.js';
 import { RegimeDetector } from '../market/regime-detector.js';
 import { TelegramAlerter } from '../metrics/alerter.js';
+import { PriorityScanner } from './priority-scanner.js';
+import { ScoutCoordinator } from '../scouts/scout-coordinator.js';
 import { metricsRegistry } from '../metrics/metrics.js';
 import type { Hex } from 'viem';
 import { buildOrder } from '../execution/order-builder.js';
@@ -32,13 +34,17 @@ import { ConvergenceStrategy } from '../strategy/custom/convergence.js';
 import { SportsbookFadeStrategy } from '../strategy/custom/sportsbook-fade.js';
 import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-divergence.js';
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
+import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
+import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { OddsApiClient } from '../market/odds-api-client.js';
 import { KalshiClient } from '../market/kalshi-client.js';
 import { FredClient } from '../market/fred-client.js';
 // value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/README.md
-import { upsertPosition, closePosition, updatePositionPrice } from '../storage/repositories/position-repo.js';
+import { upsertPosition, addFillToPosition, closePosition, updatePositionPrice } from '../storage/repositories/position-repo.js';
 import { insertSnapshot } from '../storage/repositories/snapshot-repo.js';
+import { insertResolution } from '../storage/repositories/resolution-repo.js';
 import { getOpenPositionCount, getOpenPositions, getAllOpenPositions } from '../storage/repositories/position-repo.js';
+import type { Outcome } from '../types/index.js';
 import type { ExitSignal } from '../risk/stop-loss-monitor.js';
 import { PaperResolver } from '../market/paper-resolver.js';
 import { nanoid } from 'nanoid';
@@ -72,6 +78,14 @@ export class Engine {
   private portfolioRisk: PortfolioRiskTracker;
   private regimeDetector: RegimeDetector;
   private alerter: TelegramAlerter;
+  // Phase 2 (2026-04-11): attention router for scout-flagged markets
+  private priorityScanner: PriorityScanner | null = null;
+  // Phase 4 (2026-04-11): in-process scout fleet
+  private scoutCoordinator: ScoutCoordinator | null = null;
+  // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
+  // Starts only when WHALE_COPY_ENABLED=true AND at least one row exists
+  // in whitelisted_whales. See docs/todo.md for the activation playbook.
+  private whaleSubscriber: WhaleEventSubscriber | null = null;
 
   private scanInterval: ReturnType<typeof setInterval> | null = null;
   private riskCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -93,7 +107,7 @@ export class Engine {
     // on prod because prod only trades advisor-validated strategies at baseline
     // sizing.
     const isRdMode = (process.env.BASE_PATH ?? '') === '/rd';
-    this.riskEngine = new RiskEngine(config.risk, isRdMode);
+    this.riskEngine = new RiskEngine(config.risk, isRdMode, this.marketCache);
     this.dailyLossGuard = new DailyLossGuard(this.entityManager, config.risk);
     this.stopLossMonitor = new StopLossMonitor(config.risk);
     this.dataApiClient = new DataApiClient(config.api.data_api_base_url);
@@ -101,7 +115,6 @@ export class Engine {
     this.paperResolver = new PaperResolver(
       this.entityManager,
       this.dailyLossGuard,
-      config.risk.trading_ratio,
     );
     this.portfolioRisk = new PortfolioRiskTracker();
     this.regimeDetector = new RegimeDetector();
@@ -125,6 +138,13 @@ export class Engine {
     this.strategyRegistry.register(new SportsbookFadeStrategy(this.oddsApiClient));
     this.strategyRegistry.register(new CrossMarketDivergenceStrategy(this.kalshiClient));
     this.strategyRegistry.register(new MacroForecastStrategy(this.fredClient));
+
+    // Phase C2 (2026-04-11): whale-copy strategy. DORMANT by default —
+    // its shouldRun() returns false unless WHALE_COPY_ENABLED=true env
+    // var is set. Registering it here doesn't activate it; it just makes
+    // the strategy loadable. See docs/todo.md WHALE ACTIVATION PLAYBOOK
+    // for the full flip-on sequence.
+    this.strategyRegistry.register(new WhaleCopyStrategy());
 
     // Strategy advisor (must be after strategyRegistry is populated)
     this.strategyAdvisor = new StrategyAdvisor(config.advisor, this.entityManager, this.strategyRegistry);
@@ -172,6 +192,30 @@ export class Engine {
     // stays trading-disabled until the next scan cycle's reconciliation succeeds.
     log.info('Running startup reconciliation');
     for (const entity of this.entityManager.getAllEntities()) {
+      // 2026-04-10: unconditional startup invariant — after the ratio removal,
+      // trading_balance is always equal to cash_balance and reserve_balance is
+      // always 0. This normalizes any stale stored values (from the old ratio
+      // semantics) on every restart, idempotent afterward. Runs BEFORE the
+      // wallet sync / reconciliation so everything downstream sees consistent
+      // state regardless of entity mode (live, paper, or unprovisioned).
+      if (entity.trading_balance !== entity.cash_balance || entity.reserve_balance !== 0) {
+        log.info(
+          {
+            entity: entity.config.slug,
+            old_trading: entity.trading_balance,
+            old_reserve: entity.reserve_balance,
+            cash: entity.cash_balance,
+          },
+          'Normalizing trading_balance = cash_balance, reserve_balance = 0',
+        );
+        this.entityManager.updateBalances(
+          entity.config.slug,
+          entity.cash_balance,
+          0,
+          entity.cash_balance,
+        );
+      }
+
       // Use proxy_address when present (CLOB-proxied wallets), else fall back to
       // account_address (direct-EOA wallets like polybot). The Data API /positions
       // endpoint accepts either.
@@ -182,12 +226,12 @@ export class Engine {
       }
 
       // STARTUP WALLET SYNC: read on-chain USDC balance via viem and overwrite
-      // entity.cash_balance with the ground truth. v2's DB cash_balance goes
-      // stale whenever positions resolve off-chain (via v1 auto_redeem cron or
-      // any direct redemption) because the engine doesn't see the wallet delta.
-      // Reading on-chain USDC at startup makes the v3 engine's view match
-      // reality. After this, per-scan reconciliation only manages position
-      // state (never touches cash_balance) so the sync point is deterministic.
+      // entity.cash_balance with the ground truth. The DB cash_balance can go
+      // stale whenever positions resolve off-chain or any manual redemption
+      // happens, because the engine doesn't automatically see the wallet delta.
+      // Reading on-chain USDC at startup makes the engine's view match reality.
+      // After this, per-scan reconciliation only manages position state (never
+      // touches cash_balance) so the sync point is deterministic.
       try {
         const redeemer = this.getRedeemer(entity.config.slug);
         if (redeemer && entity.config.mode === 'live') {
@@ -207,7 +251,7 @@ export class Engine {
               entity.config.slug,
               onChainUsdc,
               entity.reserve_balance,
-              onChainUsdc * this.config.risk.trading_ratio,
+              onChainUsdc, // trading_balance == cash (2026-04-10, ratio removed)
             );
           }
         }
@@ -236,7 +280,7 @@ export class Engine {
             entity.config.slug,
             newCash,
             entity.reserve_balance,
-            newCash * this.config.risk.trading_ratio,
+            newCash, // trading_balance == cash (2026-04-10, ratio removed)
           );
           log.info(
             { entity: entity.config.slug, credited: result.cashCredited.toFixed(2), new_cash: newCash.toFixed(2) },
@@ -300,6 +344,63 @@ export class Engine {
       log.info({ interval_ms: this.config.advisor.check_interval_ms, target: this.config.advisor.target_entity_slug }, 'Strategy advisor enabled');
     }
 
+    // Phase 2 (2026-04-11): start the attention router. Runs every ~30s,
+    // polls market_priorities for scout-flagged markets, and fires
+    // strategies on them out-of-cycle. Signals flow through the normal
+    // risk engine + router pipeline.
+    if (this.config.priority_scanner.enabled) {
+      this.priorityScanner = new PriorityScanner(
+        {
+          entityManager: this.entityManager,
+          strategyRegistry: this.strategyRegistry,
+          marketCache: this.marketCache,
+          riskEngine: this.riskEngine,
+          clobRouter: this.clobRouter,
+          riskLimits: this.config.risk,
+          executionConfig: {
+            slippage_bps: this.config.execution.slippage_bps,
+            bid_premium_pct: this.config.execution.bid_premium_pct,
+          },
+        },
+        {
+          enabled: this.config.priority_scanner.enabled,
+          interval_ms: this.config.priority_scanner.interval_ms,
+          max_priorities_per_run: this.config.priority_scanner.max_priorities_per_run,
+          min_scan_gap_ms: this.config.priority_scanner.min_scan_gap_ms,
+          gc_every_n_runs: this.config.priority_scanner.gc_every_n_runs,
+        },
+      );
+      this.priorityScanner.start();
+    }
+
+    // Phase 4 (2026-04-11): start the scout fleet. Each scout watches
+    // the market cache for a specific pattern (volume spike, price jump,
+    // new listing, LLM news catalyst) and writes priority/intel rows
+    // that the PriorityScanner + scout-overlay downstream consume.
+    // Scouts are safe to run on either engine — they only read + write
+    // DB state, they never place orders.
+    if (this.config.scouts.enabled) {
+      this.scoutCoordinator = new ScoutCoordinator({
+        enabled: this.config.scouts.enabled,
+        interval_ms: this.config.scouts.interval_ms,
+        disabled_scouts: this.config.scouts.disabled_scouts,
+      });
+      this.scoutCoordinator.start(this.marketCache);
+    }
+
+    // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
+    // Only starts when:
+    //   (a) WHALE_COPY_ENABLED=true env var is set, AND
+    //   (b) the whale subscriber's own start() method finds at least
+    //       one row in whitelisted_whales.
+    // Both gates are the subscriber's responsibility — we just call
+    // start() unconditionally when the flag is on, and it silently
+    // skips if there are no whales to watch.
+    if (process.env.WHALE_COPY_ENABLED === 'true') {
+      this.whaleSubscriber = new WhaleEventSubscriber();
+      this.whaleSubscriber.start();
+    }
+
     // R3b: start Telegram alerter (subscribes to event bus for kill-switch + engine events)
     this.alerter.start();
 
@@ -323,6 +424,9 @@ export class Engine {
     if (this.riskCheckInterval) clearInterval(this.riskCheckInterval);
     if (this.snapshotInterval) clearInterval(this.snapshotInterval);
     if (this.advisorInterval) clearInterval(this.advisorInterval);
+    if (this.priorityScanner) this.priorityScanner.stop();
+    if (this.scoutCoordinator) this.scoutCoordinator.stop();
+    if (this.whaleSubscriber) this.whaleSubscriber.stop();
     this.alerter.stop();
 
     this.samplingPoller.stop();
@@ -390,7 +494,7 @@ export class Engine {
             entity.config.slug,
             newCash,
             entity.reserve_balance,
-            newCash * this.config.risk.trading_ratio,
+            newCash, // trading_balance == cash (2026-04-10, ratio removed)
           );
           this.dailyLossGuard.recordPnl(entity.config.slug, result.cashCredited);
         }
@@ -580,7 +684,7 @@ export class Engine {
                     entity.config.slug,
                     newCash,
                     entity.reserve_balance,
-                    newCash * this.config.risk.trading_ratio,
+                    newCash, // trading_balance == cash (2026-04-10, ratio removed)
                   );
                 } else {
                   // SELL: credit proceeds to cash
@@ -589,7 +693,7 @@ export class Engine {
                     entity.config.slug,
                     newCash,
                     entity.reserve_balance,
-                    newCash * this.config.risk.trading_ratio,
+                    newCash, // trading_balance == cash (2026-04-10, ratio removed)
                   );
                   this.dailyLossGuard.recordPnl(entity.config.slug, fill.net_usdc);
                 }
@@ -688,11 +792,51 @@ export class Engine {
         entity.config.slug,
         newCash,
         entity.reserve_balance,
-        newCash * this.config.risk.trading_ratio,
+        newCash, // trading_balance == cash (2026-04-10, ratio removed)
       );
       // Record realized P&L (difference between proceeds and cost basis)
       const realizedPnl = fill.net_usdc - pos.cost_basis;
       this.dailyLossGuard.recordPnl(entity.config.slug, realizedPnl);
+
+      // 2026-04-10: exits are P&L events too — write a resolution row so the
+      // dashboard W/L, win-rate, and strategy-performance views include them.
+      // Previously only market-resolution closures (paper-resolver and
+      // on-chain-reconciler) wrote to `resolutions`, so every stop-loss /
+      // profit-target / hard-stop exit was invisible to the stats (R&D had
+      // 18 closed positions and zero resolution rows, prod had 0 wins / 18
+      // losses because only absent_from_api close rows existed).
+      //
+      // Semantics for a sell-exit: the market didn't resolve, we sold into
+      // the book. winning_outcome is ambiguous in the usual sense, so we
+      // record the position_side and let the sign of realized_pnl drive the
+      // win/loss classification downstream (realized_pnl > 0 → win).
+      try {
+        insertResolution({
+          entity_slug: entity.config.slug,
+          condition_id: exit.condition_id,
+          token_id: exit.token_id,
+          winning_outcome: pos.side as Outcome,
+          position_side: pos.side as Outcome,
+          size: pos.size,
+          payout_usdc: 0, // this is a sell-exit, not a redemption
+          cost_basis_usdc: pos.cost_basis,
+          sell_proceeds_usdc: fill.net_usdc,
+          realized_pnl: realizedPnl,
+          is_paper: entity.config.mode === 'paper',
+          strategy_id: pos.strategy_id ?? 'stop_loss_monitor',
+          sub_strategy_id: pos.sub_strategy_id ?? undefined,
+          market_question: pos.market_question ?? '',
+          market_slug: pos.market_slug ?? '',
+          tx_hash: null,
+          resolved_at: new Date(),
+        });
+      } catch (err) {
+        log.error(
+          { entity: entity.config.slug, condition: exit.condition_id, err: err instanceof Error ? err.message : String(err) },
+          'Failed to insert exit resolution row — position will still close but W/L stats will miss this event',
+        );
+      }
+
       // Close the DB position
       closePosition(entity.config.slug, exit.condition_id, exit.token_id, 'closed');
     }
@@ -728,7 +872,15 @@ export class Engine {
 
   private processPosition(fill: OrderFill): void {
     if (fill.side === 'BUY') {
-      upsertPosition({
+      // 2026-04-10 averaging-down bug fix: switched from upsertPosition to
+      // addFillToPosition. The old call was dropping the second (and third,
+      // fourth...) BUY fill on any (entity, condition, token) the DB already
+      // held, because upsertPosition's ON CONFLICT overwrites size/cost_basis
+      // with the new fill's values instead of accumulating them. Root cause of
+      // R&D's silent ~$400 equity leak: 1346 BUY trades but open_cost_basis
+      // only captured ~$9,588, with the gap exactly matching the sum of
+      // second-fill values on averaged positions.
+      addFillToPosition({
         entity_slug: fill.entity_slug,
         condition_id: fill.condition_id,
         token_id: fill.token_id,

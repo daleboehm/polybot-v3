@@ -1,0 +1,225 @@
+═══════════════════════════════════════════════════════════════════════════════
+POLYMARKET STRATEGY ATTRIBUTION ENGINE — QUICK REFERENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+WHAT IS IT?
+───────────
+Answers: "Which strategy is making money and which is losing money?"
+
+Classifies all 22 open positions + 701 trades into 8 strategy categories.
+Computes P&L, win rates, risk metrics, and Sharpe ratios per strategy.
+Runs automatically every hour at :30 minutes.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+COMMAND REFERENCE
+─────────────────
+
+# Run attribution manually
+ssh -i armorstack_vps_key -p 2222 root@178.62.225.235 \
+  "cd /opt/polybot && python3 strategy_attribution.py"
+
+# Check HTTP API (live data)
+curl http://178.62.225.235:5001/api/attribution | jq .
+
+# View latest JSON report
+ssh -i armorstack_vps_key -p 2222 root@178.62.225.235 \
+  "cat /opt/polybot/state/strategy_attribution.json" | jq .
+
+# Monitor cron execution
+ssh -i armorstack_vps_key -p 2222 root@178.62.225.235 \
+  "tail -10 /tmp/attribution_cron.log"
+
+# Check service status
+ssh -i armorstack_vps_key -p 2222 root@178.62.225.235 \
+  "systemctl status attribution-service"
+
+# View service logs
+ssh -i armorstack_vps_key -p 2222 root@178.62.225.235 \
+  "journalctl -u attribution-service -n 50"
+
+═══════════════════════════════════════════════════════════════════════════════
+
+CURRENT RESULTS (2026-03-30)
+────────────────────────────
+
+Strategy          Positions  Capital    Total P&L   Win Rate  Sharpe
+─────────────────────────────────────────────────────────────────────
+weather-temp      12         $93.46     -$27.04     0.0%      -135.83
+politics          2          $10.92     -$1.18      0.0%      N/A
+other             5          $16.22     +$0.14      0.0%      N/A
+finance           1          $9.80      +$0.15      N/A       N/A
+crypto-price      2          $2.48      +$0.06      0.0%      0.00
+─────────────────────────────────────────────────────────────────────
+TOTAL             22         $132.88    -$27.87
+
+KEY INSIGHTS:
+  • Weather-temp is a disaster: $93.46 deployed, -$27.04 total loss
+  • Only 2 winning strategies (finance, crypto-price): combined +$0.21
+  • Politics and weather-temp combined: -$28.22 (85% of portfolio loss)
+  • Win rate across the board: 0% (no winning trades closed)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STRATEGY CLASSIFICATION
+───────────────────────
+
+The classifier scans question text and assigns one of 8 categories:
+
+1. weather-temp
+   Keywords: temperature, temp, highest, lowest, °C, °F
+   Example: "Will the highest temperature in Miami be between 82-83°F on April 1?"
+
+2. weather-precip
+   Keywords: rain, precipitation, snow, wind, hail, moisture
+   Example: "Will it rain in Seattle on April 1?"
+
+3. crypto-price
+   Keywords: BTC, ETH, Bitcoin, Ethereum, crypto, Solana, XRP
+   Example: "Will Bitcoin close above $60,000 on March 31?"
+
+4. crypto-event
+   Keywords: fork, upgrade, hardfork, merge, Shanghai
+   Example: "Will Ethereum undergo the Shanghai upgrade?"
+
+5. politics
+   Keywords: Trump, Biden, election, Congress, Senate, president, voting
+   Example: "Will Trump announce a 2028 campaign by April 1?"
+
+6. sports
+   Keywords: Superbowl, World Cup, Olympics, NBA, NFL, MLB, NHL, tennis, golf
+   Example: "Will Kansas City Chiefs win Super Bowl LVII?"
+
+7. finance
+   Keywords: inflation, interest rate, CPI, unemployment, GDP, Fed, earnings
+   Example: "Will the March CPI print above 3.5% YoY?"
+
+8. other
+   Default for unclassified positions
+
+═══════════════════════════════════════════════════════════════════════════════
+
+KEY METRICS
+───────────
+
+PER-STRATEGY BREAKDOWN:
+
+• total_positions: Count of open positions in strategy
+• total_capital_deployed: Sum of $amount_risked across open positions
+• unrealized_pnl: Current P&L on open positions
+• realized_pnl: Closed P&L from resolved trades
+• total_pnl: unrealized + realized
+
+• total_trades: Count of closed trades
+• winning_trades: Trades with PnL > 0
+• losing_trades: Trades with PnL < 0
+• win_rate: (winning_trades / total_trades) × 100%
+• avg_win: Mean PnL for winning trades
+• avg_loss: Mean |PnL| for losing trades
+• profit_factor: (gross_profit / gross_loss)
+
+• max_single_loss: Worst trade outcome
+• max_single_win: Best trade outcome
+• std_dev_returns: Volatility of trade returns
+• sharpe_ratio: (mean_return / std_dev) × √252 (annualized risk-adjusted return)
+
+INTERPRETING SHARPE RATIO:
+  Sharpe > 1.0:  Excellent risk-adjusted returns
+  Sharpe 0.5-1:  Good risk-adjusted returns
+  Sharpe 0-0.5:  Poor risk-adjusted returns
+  Sharpe < 0:    Losing money (negative expected return)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+AUTOMATION
+──────────
+
+CRON JOB (runs every hour at :30):
+  30 * * * * /opt/polybot/run_attribution.sh
+  → Updates /opt/polybot/state/strategy_attribution.json
+
+SYSTEMD SERVICE (runs continuously):
+  attribution-service (port 5001)
+  → Serves /api/attribution endpoint
+  → Auto-restart on failure
+
+HTTP API:
+  GET http://178.62.225.235:5001/api/attribution
+  → Returns JSON with all strategy metrics
+  → CORS enabled (Access-Control-Allow-Origin: *)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+FILE LOCATIONS
+──────────────
+
+VPS (/opt/polybot/):
+  strategy_attribution.py    — Main engine
+  attribution_service.py     — HTTP server
+  run_attribution.sh         — Cron wrapper
+  state/strategy_attribution.json  — Output
+
+Local (/mnt/CLAUDE/Polymarket/):
+  strategy_attribution.py    — Source (backup)
+  attribution_service.py     — Source (backup)
+  ATTRIBUTION_ENGINE.md      — Full documentation
+  attribution_latest.json    — Latest output snapshot
+
+═══════════════════════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING
+───────────────
+
+Q: HTTP API not responding?
+A: ssh root@178.62.225.235 "systemctl status attribution-service"
+   Check: journalctl -u attribution-service -n 50
+
+Q: Attribution report out of date?
+A: Check cron log: tail -20 /tmp/attribution_cron.log
+   Or run manually: python3 strategy_attribution.py
+
+Q: Trades not being classified correctly?
+A: Classification is keyword-based regex matching on question text.
+   Check: Does question contain weather-temp keywords (temperature, temp, °C)?
+   Hardcoded strategies in StrategyClassifier class.
+
+Q: Sharpe ratios all showing 0.00?
+A: Means no trades closed yet for that strategy (std_dev_returns = 0).
+   Will improve as more trades resolve.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+STRATEGIC INSIGHTS
+──────────────────
+
+RECOMMENDATION: REDUCE WEATHER-TEMP EXPOSURE
+
+Why:
+  • Highest capital deployed: $93.46 (70% of portfolio)
+  • Worst performance: -$27.04 total loss
+  • Zero winning trades: 0% win rate
+  • Worst single loss: -$11.07
+  • Sharpe ratio: -135.83 (catastrophically negative)
+
+Action Items:
+  1. Reduce new weather-temp bets immediately
+  2. Implement tighter stops on open positions ($5-$10 max loss each)
+  3. Consider closing largest losers (>-$3 each)
+  4. Reallocate freed capital to politics/crypto-price/finance (minimal losses)
+  5. Review weather temperature selection algorithm (why is it so wrong?)
+
+POSITIVE SIGNALS:
+  • Finance: +$0.15 (small, but positive)
+  • Crypto-price: +$0.06 (small position, neutral)
+  • Other: +$0.14 (diversified winners)
+
+NEXT STEPS:
+  1. Monitor attribution report hourly (via /api/attribution)
+  2. Implement automatic capital reallocation based on Sharpe ratios
+  3. Add tail-bet detection for <$0.10 entry prices
+  4. Consider strategy rotation logic
+
+═══════════════════════════════════════════════════════════════════════════════
+Generated: 2026-03-30 05:15 UTC
+Next update: 2026-03-30 06:30 UTC
+═══════════════════════════════════════════════════════════════════════════════

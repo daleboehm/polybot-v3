@@ -91,6 +91,14 @@ export class CryptoPriceStrategy extends BaseStrategy {
       const parsed = this.parseCryptoQuestion(market.question);
       if (!parsed) continue;
 
+      // Phase R2.1 (2026-04-12): Lummox_eth whale analysis confirmed BTC
+      // is the only crypto with sufficient Polymarket 5-min market depth.
+      // ETH/SOL markets have too-thin books and our liquidity sizer would
+      // reject most entries anyway. Hard-gate: only trade BTC markets.
+      // Keep parsing ETH/SOL so the data stays visible in logs/dashboards,
+      // but skip signal generation.
+      if (parsed.coingeckoId !== 'bitcoin') continue;
+
       // Get current price — Binance first (1-min cache), CoinGecko fallback (5-min)
       let currentPrice = await getBinancePrice(parsed.coingeckoId);
       if (!currentPrice) currentPrice = await this.getPrice(parsed.coingeckoId);

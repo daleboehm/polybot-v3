@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Polybot V2 CLI — management interface
+// Polybot V3 CLI — management interface
 
 import { Command } from 'commander';
 import { loadConfig } from '../config/loader.js';
@@ -143,27 +143,608 @@ program
   });
 
 // ─── MIGRATE ────────────────────────────────────────────────
+// 2026-04-10: stripped v1 import flags. v1 is dead per Dale's directive, and the
+// v1-import helper module has been deleted. This command now only initializes
+// a fresh v3 schema on a new database.
 program
   .command('migrate')
-  .description('Initialize schema or import v1 data')
-  .option('--init', 'Initialize fresh schema')
-  .option('--v1', 'Import v1 data from existing databases')
-  .option('--v1-path <path>', 'Path to v1 portfolio.db', '/opt/polybot/db/portfolio.db')
+  .description('Initialize fresh schema on a v3 database')
+  .action(async () => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+    console.log('Schema initialized');
+    closeDatabase();
+  });
+
+// ─── BACKFILL-MARKETS ───────────────────────────────────────
+// 2026-04-10: long-tail market metadata backfill. Walks open positions, finds
+// the ones whose markets row is missing end_date or sits outside the sampling
+// horizon, re-queries Gamma, and UPSERTs truth back into the DB. Intended to
+// run hourly via systemd timer — complements sampling-poller, doesn't replace it.
+program
+  .command('backfill-markets')
+  .description('Run long-tail market metadata backfill for open positions')
+  .option('--horizon-days <n>', 'Sampling horizon in days', '60')
+  .option('--dry-run', 'Log planned writes without touching the DB', false)
+  .option('--condition-id <id>', 'Restrict to a single condition_id (debugging)')
   .action(async (opts) => {
     const config = loadConfig();
     const db = initDatabase(config.database.path);
+    applySchema(db);
 
-    if (opts.init || !opts.v1) {
-      applySchema(db);
-      console.log('Schema initialized');
-    }
+    const { runLongTailBackfill } = await import('../market/long-tail-backfill.js');
+    const result = await runLongTailBackfill({
+      horizonDays: Number(opts.horizonDays),
+      dryRun: Boolean(opts.dryRun),
+      onlyConditionId: opts.conditionId,
+    });
 
-    if (opts.v1) {
-      console.log(`V1 migration from ${opts.v1Path} — not yet implemented`);
-      console.log('Run: tsx src/storage/migration/v1-import.ts');
+    console.log('\n=== Long-Tail Backfill Result ===');
+    console.log(`Examined:            ${result.examined}`);
+    console.log(`Inside horizon:      ${result.skipped_inside_horizon}`);
+    console.log(`Already closed:      ${result.skipped_already_closed}`);
+    console.log(`Needed backfill:     ${result.needed_backfill}`);
+    console.log(`Updated:             ${result.updated}`);
+    console.log(`Inserted new:        ${result.inserted_new}`);
+    console.log(`Marked closed:       ${result.marked_closed}`);
+    console.log(`Errors:              ${result.errors.length}`);
+    if (result.errors.length > 0) {
+      for (const e of result.errors) {
+        console.log(`  ${e.conditionId}: ${e.error}`);
+      }
     }
+    console.log('');
 
     closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
+// ─── UMA-WATCH ──────────────────────────────────────────────
+// 2026-04-11: Phase 1.2 — UMA dispute watcher. Polls Gamma for every open
+// position's condition_id, records umaResolutionStatus, alerts on new
+// disputes via Telegram. Policy: hold and wait (NO-LOSE), never auto-exit.
+program
+  .command('uma-watch')
+  .description('Check UMA resolution status for every open position and alert on disputes')
+  .option('--dry-run', 'Log planned writes/alerts without touching DB or Telegram', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { runUmaDisputeWatcher } = await import('../market/uma-dispute-watcher.js');
+    const { TelegramAlerter } = await import('../metrics/alerter.js');
+    const alerter = new TelegramAlerter();
+    alerter.start();
+
+    const result = await runUmaDisputeWatcher({
+      dryRun: Boolean(opts.dryRun),
+      alerter: opts.dryRun ? undefined : alerter,
+    });
+
+    console.log('\n=== UMA Dispute Watcher Result ===');
+    console.log(`Examined:                ${result.examined}`);
+    console.log(`Updated (status changed):${result.updated}`);
+    console.log(`New disputes alerted:    ${result.new_disputes}`);
+    console.log(`Already-flagged:         ${result.already_flagged}`);
+    console.log(`Resolved since last:     ${result.resolved_since_last_check}`);
+    console.log(`Errors:                  ${result.errors.length}`);
+    if (result.disputes.length > 0) {
+      console.log('\nNew disputes:');
+      for (const d of result.disputes) {
+        console.log(`  ${d.conditionId.substring(0, 18)} — "${d.question.substring(0, 60)}"`);
+        console.log(`    ${d.oldStatus || '(empty)'} → ${d.newStatus}`);
+      }
+    }
+    if (result.errors.length > 0) {
+      console.log('\nErrors:');
+      for (const e of result.errors) {
+        console.log(`  ${e.conditionId.substring(0, 18)}: ${e.error}`);
+      }
+    }
+    console.log('');
+
+    alerter.stop();
+    closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
+// ─── KALSHI-ARB-SCAN ────────────────────────────────────────
+// Phase 2.4 (2026-04-11): read-only arb scanner. Walks active Poly markets,
+// fetches Kalshi equivalents, logs opportunities to kalshi_arb_opportunities.
+// NEVER executes trades — Dale's directive is manual review first.
+program
+  .command('kalshi-arb-scan')
+  .description('Scan for Polymarket-Kalshi price divergence opportunities (read-only)')
+  .option('--dry-run', 'Log opportunities without writing to DB', false)
+  .option('--min-divergence <pct>', 'Minimum divergence %', '0.03')
+  .option('--min-volume <usd>', 'Minimum 24h volume (Poly side); 0 = disabled since CLOB does not populate volume', '0')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { runKalshiArbScanner } = await import('../market/kalshi-arb-scanner.js');
+    const result = await runKalshiArbScanner({
+      dryRun: Boolean(opts.dryRun),
+      minDivergencePct: Number(opts.minDivergence),
+      minVolumeUsd: Number(opts.minVolume),
+    });
+
+    console.log('\n=== Kalshi Arb Scanner Result ===');
+    console.log(`Poly markets considered:  ${result.poly_markets_considered}`);
+    console.log(`Kalshi markets fetched:   ${result.kalshi_markets_fetched}`);
+    console.log(`Matches found:            ${result.matches_found}`);
+    console.log(`Arb opportunities:        ${result.arb_opportunities}`);
+    console.log(`Errors:                   ${result.errors.length}`);
+    if (result.opportunities.length > 0) {
+      console.log('\nOpportunities:');
+      for (const o of result.opportunities) {
+        console.log(`  ${o.divergence_pct.toFixed(3)} | ${o.direction}`);
+        console.log(`    Poly:   $${o.poly_yes_price.toFixed(3)} | ${o.poly_question.substring(0, 70)}`);
+        console.log(`    Kalshi: $${o.kalshi_yes_price.toFixed(3)} | ${o.kalshi_title.substring(0, 70)}`);
+      }
+    }
+    console.log('');
+
+    closeDatabase();
+    process.exit(result.errors.length > 0 ? 1 : 0);
+  });
+
+// ─── SMART-MONEY-FILTER ─────────────────────────────────────
+// Phase C1b (2026-04-11): nightly job that walks smart_money_candidates
+// rows with status='candidate', fetches each wallet's resolved-position
+// history from the Data API, computes the Bravado Trade 4-threshold
+// filter, and promotes survivors to whitelisted_whales.
+//
+// Bravado thresholds (from 6-agent research synthesis, Agent 3):
+//   1. >=200 settled markets         (sample size floor)
+//   2. >=65% win rate                (real edge, not noise)
+//   3. varied position sizing        (uniform max = wash/leaderboard farming)
+//   4. cross-category (>=3 categories)  (single-topic = news-driven, not edge)
+//
+// Usage:
+//   polybot smart-money-filter [--dry-run] [--max-age-days 14]
+//
+// NOT wired to a systemd timer by default. Operator runs manually or
+// adds a cron entry. See docs/todo.md WHALE ACTIVATION PLAYBOOK.
+program
+  .command('smart-money-filter')
+  .description('Run the Bravado 4-threshold filter on smart_money_candidates and promote survivors')
+  .option('--dry-run', 'Evaluate without updating any DB rows', false)
+  .option('--max-age-days <n>', 'Skip candidates with last_filter_run_at newer than N days', '1')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { DataApiClient } = await import('../market/data-api-client.js');
+    const {
+      listUnfiltered,
+      listAllCandidates,
+      recordFilterResult,
+      promoteWhale,
+    } = await import('../storage/repositories/smart-money-repo.js');
+
+    const dataApi = new DataApiClient(config.api.data_api_base_url);
+
+    // Gather the set we'll evaluate. 'candidate' status = never evaluated.
+    // Also re-evaluate 'failed' rows if they're older than max-age-days,
+    // because the wallet may have gained more data since the last run.
+    const maxAgeMs = Number(opts.maxAgeDays) * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const all = listAllCandidates();
+    const targets = all.filter(c => {
+      if (c.status === 'candidate') return true;
+      if (c.status === 'failed' && c.last_filter_run_at !== null && now - c.last_filter_run_at > maxAgeMs) return true;
+      if (c.status === 'passed') return false; // already promoted
+      if (c.status === 'expired') return false;
+      return false;
+    });
+
+    console.log(`\n=== Smart Money Filter ===`);
+    console.log(`Total candidates:  ${all.length}`);
+    console.log(`To evaluate:       ${targets.length}`);
+    console.log(`Dry run:           ${opts.dryRun ? 'YES' : 'NO'}`);
+    console.log();
+
+    if (targets.length === 0) {
+      console.log('Nothing to filter.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    let passed = 0;
+    let failed = 0;
+    let errored = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const cand = targets[i]!;
+      console.log(`[${i + 1}/${targets.length}] ${cand.proxy_wallet.substring(0, 14)} ${cand.pseudonym ?? ''}`);
+
+      let resolvedPositions;
+      try {
+        // Use the resolved-positions endpoint. This is documented as
+        // broken (returns active rows) but the fallback is to filter
+        // the full list ourselves for cashPnl != 0 which marks settled.
+        const allPos = await dataApi.getAllPositions(cand.proxy_wallet);
+        // A position with cashPnl != 0 has settled — either won or lost.
+        // An active position with positive unrealized value has cashPnl=0.
+        resolvedPositions = allPos.filter(p => {
+          const pnl = Number(p.cashPnl);
+          return Number.isFinite(pnl) && pnl !== 0;
+        });
+      } catch (err) {
+        console.log(`    ERROR fetching positions: ${err instanceof Error ? err.message : String(err)}`);
+        errored++;
+        continue;
+      }
+
+      const settled_markets = resolvedPositions.length;
+      const wins = resolvedPositions.filter(p => Number(p.cashPnl) > 0).length;
+      const win_rate = settled_markets > 0 ? wins / settled_markets : 0;
+
+      // Category count: group by eventSlug prefix (first word of slug)
+      const categories = new Set<string>();
+      for (const p of resolvedPositions) {
+        const slug = p.slug ?? '';
+        const firstWord = slug.split('-')[0] ?? 'unknown';
+        categories.add(firstWord);
+      }
+      const category_count = categories.size;
+
+      // Uniform sizing check: compute stddev of initialValue across
+      // positions. If stddev / mean < 0.1, the wallet bets uniform sizes
+      // (leaderboard farming). We flag that as a fail signal.
+      let uniform_sizing = false;
+      if (resolvedPositions.length >= 10) {
+        const values = resolvedPositions.map(p => Number(p.initialValue) || 0).filter(v => v > 0);
+        if (values.length >= 10) {
+          const mean = values.reduce((s, v) => s + v, 0) / values.length;
+          const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+          const stddev = Math.sqrt(variance);
+          const coefVar = mean > 0 ? stddev / mean : 0;
+          uniform_sizing = coefVar < 0.1;
+        }
+      }
+
+      // Apply the 4 Bravado thresholds
+      const pass_n = settled_markets >= 200;
+      const pass_wr = win_rate >= 0.65;
+      const pass_varied = !uniform_sizing;
+      const pass_category = category_count >= 3;
+      const passed_all = pass_n && pass_wr && pass_varied && pass_category;
+
+      console.log(
+        `    n=${settled_markets} ` +
+          `wr=${(win_rate * 100).toFixed(1)}% ` +
+          `cats=${category_count} ` +
+          `uniform=${uniform_sizing} ` +
+          `→ ${passed_all ? 'PASS' : 'FAIL'}`,
+      );
+      console.log(
+        `    gates: n>=200=${pass_n}  wr>=65%=${pass_wr}  varied=${pass_varied}  cats>=3=${pass_category}`,
+      );
+
+      if (!opts.dryRun) {
+        try {
+          recordFilterResult(
+            cand.proxy_wallet,
+            {
+              settled_markets,
+              win_rate,
+              category_count,
+              uniform_sizing,
+            },
+            passed_all,
+          );
+          if (passed_all) {
+            promoteWhale({
+              proxy_wallet: cand.proxy_wallet,
+              pseudonym: cand.pseudonym,
+              promoted_by: 'smart-money-filter',
+              reason: `auto-promoted: n=${settled_markets} wr=${(win_rate * 100).toFixed(1)}% cats=${category_count}`,
+            });
+          }
+        } catch (err) {
+          console.log(`    DB update failed: ${err instanceof Error ? err.message : String(err)}`);
+          errored++;
+          continue;
+        }
+      }
+
+      if (passed_all) passed++;
+      else failed++;
+
+      console.log();
+    }
+
+    console.log(`=== Summary ===`);
+    console.log(`Passed: ${passed}`);
+    console.log(`Failed: ${failed}`);
+    console.log(`Errors: ${errored}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(errored > 0 ? 1 : 0);
+  });
+
+// ─── WHALE-SEED ─────────────────────────────────────────────
+// Manual whitelist seed. Used to bootstrap the whale-copy strategy
+// before the smart-money-filter has enough candidate data to promote
+// survivors automatically.
+//
+// Usage:
+//   polybot whale-seed --wallet 0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf --name Fredi9999 --reason "2024-election-research"
+//   polybot whale-seed --wallet 0x... --copy-multiplier 0.5
+program
+  .command('whale-seed')
+  .description('Manually add a wallet to whitelisted_whales (bootstrap before filter has data)')
+  .requiredOption('--wallet <address>', '0x-prefixed proxy wallet address')
+  .option('--name <pseudonym>', 'Display name for dashboards')
+  .option('--reason <reason>', 'Why this wallet is whitelisted', 'manual seed')
+  .option('--copy-multiplier <n>', 'Size multiplier applied to copied trades (0-2.0)', '1.0')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { promoteWhale, seedCandidateSkeleton, getWhale } = await import('../storage/repositories/smart-money-repo.js');
+
+    const wallet = opts.wallet.toLowerCase();
+    if (!wallet.startsWith('0x') || wallet.length !== 42) {
+      console.error(`Invalid wallet address: ${opts.wallet}`);
+      process.exit(1);
+    }
+    const multiplier = Number(opts.copyMultiplier);
+    if (!Number.isFinite(multiplier) || multiplier < 0 || multiplier > 2) {
+      console.error(`copy-multiplier must be a number in [0, 2.0]`);
+      process.exit(1);
+    }
+
+    // Ensure a candidate skeleton exists so the FK from whitelisted_whales
+    // has a target.
+    seedCandidateSkeleton(wallet, opts.name ?? null);
+    promoteWhale({
+      proxy_wallet: wallet,
+      pseudonym: opts.name ?? null,
+      promoted_by: 'manual',
+      reason: opts.reason,
+      copy_multiplier: multiplier,
+    });
+
+    const whale = getWhale(wallet);
+    console.log(`\n=== Whale seeded ===`);
+    console.log(`Wallet:     ${whale?.proxy_wallet}`);
+    console.log(`Pseudonym:  ${whale?.pseudonym ?? '-'}`);
+    console.log(`Reason:     ${whale?.reason}`);
+    console.log(`Multiplier: ${whale?.copy_multiplier}`);
+    console.log(`Active:     ${whale?.active === 1}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(0);
+  });
+
+// ─── REDEEM-ALL ─────────────────────────────────────────────
+// Phase -1 fix (2026-04-11): prod had 33 redeemable positions on-chain
+// worth ~$48.96 sitting in the CTF contract, never flowed back to the
+// wallet. The per-cycle engine reconciler doesn't call redeemPositions()
+// (intentionally deferred in R1 per the original design). This command
+// walks the Data API's full position list, filters `redeemable: true`,
+// groups by conditionId + outcome, and calls NegRiskRedeemer.redeem()
+// for each unique condition_id.
+//
+// Usage:
+//   polybot redeem-all --entity polybot [--limit N] [--dry-run]
+//
+// Default behavior: dry-run OFF, no limit. Use --dry-run to see what
+// would be redeemed without submitting any tx.
+program
+  .command('redeem-all')
+  .description('Call redeemPositions() for every redeemable position on an entity wallet')
+  .requiredOption('--entity <slug>', 'Entity slug (e.g. polybot)')
+  .option('--limit <n>', 'Redeem at most N positions then stop', '0')
+  .option('--dry-run', 'Log planned redemptions without submitting any tx', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    // Find the entity config + load its wallet credentials.
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) {
+      console.error(`Entity ${opts.entity} not found in config`);
+      process.exit(1);
+    }
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key) {
+      console.error(`No wallet credentials for ${opts.entity}`);
+      process.exit(1);
+    }
+    const proxyOrEoa = creds.proxy_address || creds.account_address;
+    if (!proxyOrEoa) {
+      console.error(`Entity ${opts.entity} has no proxy_address or account_address`);
+      process.exit(1);
+    }
+
+    // Fetch every position on-chain via the full /positions endpoint.
+    const { DataApiClient } = await import('../market/data-api-client.js');
+    const dataApi = new DataApiClient(config.api.data_api_base_url);
+    let allPositions;
+    try {
+      allPositions = await dataApi.getAllPositions(proxyOrEoa);
+    } catch (err) {
+      console.error(`Data API fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const redeemable = allPositions.filter(p => p.redeemable === true);
+    // NegRiskAdapter only handles negRisk markets. Non-negRisk positions
+    // use a different contract path (CTF Exchange) with a different signature.
+    // For now we redeem negRisk positions through NegRiskRedeemer and skip
+    // the rest with a clear log line so the operator knows to handle them
+    // separately.
+    const negRiskRedeemable = redeemable.filter(p => p.negativeRisk === true);
+    const otherRedeemable = redeemable.filter(p => p.negativeRisk !== true);
+    console.log(`\n=== Redeem All ===`);
+    console.log(`Wallet:            ${proxyOrEoa}`);
+    console.log(`Total positions:   ${allPositions.length}`);
+    console.log(`Redeemable:        ${redeemable.length}`);
+    console.log(`  negRisk:         ${negRiskRedeemable.length} (handled by this command)`);
+    console.log(`  non-negRisk:     ${otherRedeemable.length} (SKIPPED — needs separate CTF Exchange redemption path)`);
+    console.log(`Dry run:           ${opts.dryRun ? 'YES' : 'NO'}`);
+    const limit = Number(opts.limit) || 0;
+    if (limit > 0) console.log(`Limit:             ${limit}`);
+    console.log();
+
+    if (otherRedeemable.length > 0) {
+      console.log(`Non-negRisk redeemable positions (skipped):`);
+      for (const p of otherRedeemable) {
+        const v = Number(p.currentValue) || 0;
+        console.log(`  [${p.outcome}] \$${v.toFixed(4)}  ${p.title?.substring(0, 60)}`);
+      }
+      console.log();
+    }
+
+    if (negRiskRedeemable.length === 0) {
+      console.log('Nothing to redeem via NegRiskAdapter.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    // Group by conditionId. NegRiskAdapter.redeemPositions() convention
+    // per Polymarket's own contract source:
+    //
+    //   _amounts should always have length 2, with the first element
+    //   being the amount of YES tokens to redeem and the second element
+    //   being the amount of NO tokens to redeem.
+    //
+    // We use outcomeIndex (0 or 1) from the Data API rather than the
+    // outcome name string, because non-standard outcome strings can
+    // appear on some markets. For negRisk markets (the only ones this
+    // command handles), outcomeIndex is reliably 0 for YES-side and 1
+    // for NO-side.
+    //
+    // Tokens are 6-decimal USDC-denominated: sizeMicro = floor(size * 1e6)
+    const byCondition = new Map<string, {
+      title: string;
+      yesSize: number;
+      noSize: number;
+      totalValue: number;
+      cashPnl: number;
+    }>();
+    for (const p of negRiskRedeemable) {
+      const existing = byCondition.get(p.conditionId) ?? {
+        title: p.title || '?',
+        yesSize: 0,
+        noSize: 0,
+        totalValue: 0,
+        cashPnl: 0,
+      };
+      const size = Number(p.size) || 0;
+      const value = Number(p.currentValue) || 0;
+      const pnl = Number(p.cashPnl) || 0;
+      const idx = Number(p.outcomeIndex);
+      if (idx === 0) {
+        existing.yesSize += size;
+      } else if (idx === 1) {
+        existing.noSize += size;
+      } else {
+        console.log(`    WARN: unexpected outcomeIndex=${p.outcomeIndex} outcome=${p.outcome} for ${p.conditionId.substring(0, 14)} — skipping`);
+        continue;
+      }
+      existing.totalValue += value;
+      existing.cashPnl += pnl;
+      byCondition.set(p.conditionId, existing);
+    }
+    console.log(`Unique condition IDs (negRisk): ${byCondition.size}`);
+    console.log();
+
+    // Construct the redeemer
+    const { NegRiskRedeemer } = await import('../execution/neg-risk-redeemer.js');
+    const privateKeyHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const redeemer = new NegRiskRedeemer(privateKeyHex);
+
+    // Verify CTF approval once before looping (faster than hitting the
+    // same error 33 times). isAdapterApproved() uses the EOA from the
+    // private key, which is the correct subject for prod's direct-EOA
+    // wallet (wallet_address == EOA, no separate proxy).
+    if (!opts.dryRun) {
+      try {
+        const approved = await redeemer.isAdapterApproved();
+        if (!approved) {
+          console.error(`Wallet has NOT granted CTF approval to NegRiskAdapter.`);
+          console.error(`All redeemPositions calls will revert. Submit setApprovalForAll first.`);
+          process.exit(1);
+        }
+        console.log(`CTF approval verified.`);
+        console.log();
+      } catch (err) {
+        console.warn(`Approval check failed (will try anyway): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Walk the unique conditions and redeem each
+    let successes = 0;
+    let failures = 0;
+    let totalClaimedMicro = 0n;
+    let i = 0;
+    for (const [conditionId, agg] of byCondition.entries()) {
+      i++;
+      if (limit > 0 && i > limit) {
+        console.log(`Reached limit ${limit}, stopping.`);
+        break;
+      }
+
+      // Build the amounts array per the NegRiskAdapter convention:
+      // [yesAmount, noAmount] with 6-decimal precision.
+      const yesMicro = BigInt(Math.floor(agg.yesSize * 1_000_000));
+      const noMicro = BigInt(Math.floor(agg.noSize * 1_000_000));
+      const amounts = [yesMicro, noMicro];
+
+      console.log(`[${i}/${byCondition.size}] ${conditionId.substring(0, 20)}...`);
+      console.log(`    title:     ${agg.title.substring(0, 70)}`);
+      console.log(`    yes/no:    ${agg.yesSize} / ${agg.noSize}`);
+      console.log(`    value:     $${agg.totalValue.toFixed(4)}`);
+      console.log(`    cashPnl:   $${agg.cashPnl.toFixed(4)}`);
+
+      if (opts.dryRun) {
+        console.log(`    DRY RUN — not submitting tx`);
+        console.log();
+        continue;
+      }
+
+      try {
+        const result = await redeemer.redeem(conditionId as `0x${string}`, amounts);
+        if (result.success) {
+          successes++;
+          totalClaimedMicro += result.usdcClaimed;
+          console.log(`    OK tx=${result.txHash}`);
+          console.log(`    claimed=${(Number(result.usdcClaimed) / 1e6).toFixed(4)} USDC`);
+        } else {
+          failures++;
+          console.log(`    FAIL: ${result.error}`);
+        }
+      } catch (err) {
+        failures++;
+        console.log(`    THREW: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      console.log();
+    }
+
+    console.log(`=== Summary ===`);
+    console.log(`Successes:      ${successes}`);
+    console.log(`Failures:       ${failures}`);
+    console.log(`USDC claimed:   $${(Number(totalClaimedMicro) / 1e6).toFixed(4)}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(failures > 0 ? 1 : 0);
   });
 
 // ─── REPORT ─────────────────────────────────────────────────

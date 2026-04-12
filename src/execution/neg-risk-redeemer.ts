@@ -1,4 +1,4 @@
-// NegRiskAdapter on-chain redemption — v3-owned, replaces legacy v1 auto_redeem.py cron.
+// NegRiskAdapter on-chain redemption — v3-native.
 //
 // Polymarket negative-risk markets (weather, crypto, multi-outcome events) settle via
 // the NegRiskAdapter contract at 0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296 on Polygon.
@@ -6,9 +6,9 @@
 // convert their winning conditional tokens back to USDC.
 //
 // Requires: the wallet must have previously called CTF.setApprovalForAll(adapter, true).
-// v1's auto_redeem.py did this as a one-time setup; v3 assumes approval is already granted.
-// If it isn't, redeemPositions will revert with an approval error and the reconciler
-// will log + skip until Dale manually runs the approval tx.
+// v3 assumes approval is already granted. If it isn't, redeemPositions will revert with
+// an approval error and the reconciler will log + skip until the approval tx is manually
+// submitted.
 
 import { createWalletClient, createPublicClient, http, parseAbi, type Address, type Hex } from 'viem';
 import { polygon } from 'viem/chains';
@@ -17,16 +17,13 @@ import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('neg-risk-redeemer');
 
-// Polymarket negative-risk adapter on Polygon mainnet.
-// Source: Polymarket/auto_redeem.py:42 — the ADAPTER, not the exchange.
+// Polymarket negative-risk adapter on Polygon mainnet (the ADAPTER contract, not the exchange).
 export const NEG_RISK_ADAPTER: Address = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
 
 // Conditional Tokens Framework (ERC-1155 holding YES/NO tokens).
-// Source: Polymarket/auto_redeem.py:41.
 export const CTF_ADDRESS: Address = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 
 // USDC on Polygon (for balance checks pre/post redemption).
-// Source: Polymarket/auto_redeem.py:43.
 export const USDC_ADDRESS: Address = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
 const NEG_RISK_ABI = parseAbi([
