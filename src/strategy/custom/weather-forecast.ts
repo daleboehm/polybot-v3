@@ -412,9 +412,11 @@ export class WeatherForecastStrategy extends BaseStrategy {
           const fallbackResp = await fetch(defaultUrl, { signal: AbortSignal.timeout(10_000) });
           if (fallbackResp.ok) {
             const fallbackData = await fallbackResp.json() as OpenMeteoResponse;
-            if (fallbackData.daily?.temperature_2m_max?.[0] !== null) {
-              high_f = fallbackData.daily.temperature_2m_max[0];
-              low_f = fallbackData.daily.temperature_2m_min[0];
+            const fbHigh = fallbackData.daily?.temperature_2m_max?.[0] ?? null;
+            const fbLow = fallbackData.daily?.temperature_2m_min?.[0] ?? null;
+            if (fbHigh !== null && fbLow !== null) {
+              high_f = fbHigh;
+              low_f = fbLow;
               useAifs = false;
             }
           }
