@@ -378,7 +378,11 @@ ${marketList}
 
 Evaluate each. Return findings JSON.`;
 
-    const response = await this.client.messages.create({
+    // Race the API call against a hard timeout. The Anthropic SDK has
+    // its own timeout but it's not always reliable when the connection
+    // hangs at the TCP level. A 45-second race wrapper guarantees we
+    // never block the scout indefinitely.
+    const apiPromise = this.client.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: [
@@ -395,6 +399,10 @@ Evaluate each. Return findings JSON.`;
         },
       ],
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('LLM scout hard timeout (45s)')), 45_000),
+    );
+    const response = await Promise.race([apiPromise, timeoutPromise]);
 
     // Extract text content (first text block)
     const textBlock = response.content.find(
