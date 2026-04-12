@@ -45,7 +45,11 @@ entities:
           - fan_fade
       - longshot
       - convergence
-      - sportsbook_fade
+      # 2026-04-12: sportsbook_fade DISABLED after 24h review.
+      # 14 resolutions, 0 wins, 1 loss, -$1.05. The Odds API feed
+      # is not producing edge on sports markets. Re-enable after
+      # investigation of the sportsbook-fade probability model.
+      # - sportsbook_fade
       - cross_market
       - macro_forecast
       # Phase C2 (2026-04-11): whale_copy strategy exists in the code
