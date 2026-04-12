@@ -24,6 +24,7 @@ import { PriceJumpScout } from './price-jump-scout.js';
 import { NewListingScout } from './new-listing-scout.js';
 import { LlmNewsScout } from './llm-news-scout.js';
 import { LeaderboardPollerScout } from './leaderboard-poller-scout.js';
+import { ExchangeDivergenceScout } from './exchange-divergence-scout.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('scout-coordinator');
@@ -64,6 +65,7 @@ export class ScoutCoordinator {
       new NewListingScout(),
       new LlmNewsScout(),
       new LeaderboardPollerScout(),
+      new ExchangeDivergenceScout(),
     ];
     this.scouts = all.filter(s => !this.config.disabled_scouts.includes(s.id));
     log.info(
