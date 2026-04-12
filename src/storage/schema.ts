@@ -397,8 +397,8 @@ CREATE INDEX IF NOT EXISTS idx_smc_last_seen ON smart_money_candidates(last_seen
 -- approved (either by the filter job automatically or by the operator
 -- manually via CLI). The whale-copy strategy ONLY copies trades from
 -- wallets in this table. Seeding happens via either:
---   1. `polybot smart-money-filter` — nightly job, auto-promotes filter passers
---   2. `polybot whale-seed --wallet 0x... [--reason ...]` — manual seed
+--   1. polybot smart-money-filter (nightly job, auto-promotes filter passers)
+--   2. polybot whale-seed --wallet 0x... (manual seed)
 --
 -- Manual seeds are how we bootstrap before the filter has enough data
 -- (e.g. seeding Fredi9999 from the 2024 election research).
