@@ -82,4 +82,20 @@ export interface EngineEvents {
 
   // Snapshots
   'snapshot:captured':     { entity_slug: string; equity: number; timestamp: Date };
+
+  // Whale tracking (Phase C1c, 2026-04-11). Emitted by WhaleEventSubscriber
+  // when a whitelisted wallet's OrderFilled event is observed on Polygon.
+  // The whale-copy strategy does NOT subscribe directly — it reads the
+  // whale_trades table on its normal scan cycle. This event is for
+  // observability (dashboard ticker, alert hooks, metrics).
+  'whale:trade_observed':  {
+    proxy_wallet: string;
+    tx_hash: string;
+    block_number: bigint;
+    maker_asset_id: bigint;
+    taker_asset_id: bigint;
+    maker_amount_filled: bigint;
+    taker_amount_filled: bigint;
+    whale_is_maker: boolean;
+  };
 }
