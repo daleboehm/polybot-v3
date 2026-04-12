@@ -292,6 +292,241 @@ program
     process.exit(result.errors.length > 0 ? 1 : 0);
   });
 
+// ─── SMART-MONEY-FILTER ─────────────────────────────────────
+// Phase C1b (2026-04-11): nightly job that walks smart_money_candidates
+// rows with status='candidate', fetches each wallet's resolved-position
+// history from the Data API, computes the Bravado Trade 4-threshold
+// filter, and promotes survivors to whitelisted_whales.
+//
+// Bravado thresholds (from 6-agent research synthesis, Agent 3):
+//   1. >=200 settled markets         (sample size floor)
+//   2. >=65% win rate                (real edge, not noise)
+//   3. varied position sizing        (uniform max = wash/leaderboard farming)
+//   4. cross-category (>=3 categories)  (single-topic = news-driven, not edge)
+//
+// Usage:
+//   polybot smart-money-filter [--dry-run] [--max-age-days 14]
+//
+// NOT wired to a systemd timer by default. Operator runs manually or
+// adds a cron entry. See docs/todo.md WHALE ACTIVATION PLAYBOOK.
+program
+  .command('smart-money-filter')
+  .description('Run the Bravado 4-threshold filter on smart_money_candidates and promote survivors')
+  .option('--dry-run', 'Evaluate without updating any DB rows', false)
+  .option('--max-age-days <n>', 'Skip candidates with last_filter_run_at newer than N days', '1')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { DataApiClient } = await import('../market/data-api-client.js');
+    const {
+      listUnfiltered,
+      listAllCandidates,
+      recordFilterResult,
+      promoteWhale,
+    } = await import('../storage/repositories/smart-money-repo.js');
+
+    const dataApi = new DataApiClient(config.api.data_api_base_url);
+
+    // Gather the set we'll evaluate. 'candidate' status = never evaluated.
+    // Also re-evaluate 'failed' rows if they're older than max-age-days,
+    // because the wallet may have gained more data since the last run.
+    const maxAgeMs = Number(opts.maxAgeDays) * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const all = listAllCandidates();
+    const targets = all.filter(c => {
+      if (c.status === 'candidate') return true;
+      if (c.status === 'failed' && c.last_filter_run_at !== null && now - c.last_filter_run_at > maxAgeMs) return true;
+      if (c.status === 'passed') return false; // already promoted
+      if (c.status === 'expired') return false;
+      return false;
+    });
+
+    console.log(`\n=== Smart Money Filter ===`);
+    console.log(`Total candidates:  ${all.length}`);
+    console.log(`To evaluate:       ${targets.length}`);
+    console.log(`Dry run:           ${opts.dryRun ? 'YES' : 'NO'}`);
+    console.log();
+
+    if (targets.length === 0) {
+      console.log('Nothing to filter.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    let passed = 0;
+    let failed = 0;
+    let errored = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const cand = targets[i]!;
+      console.log(`[${i + 1}/${targets.length}] ${cand.proxy_wallet.substring(0, 14)} ${cand.pseudonym ?? ''}`);
+
+      let resolvedPositions;
+      try {
+        // Use the resolved-positions endpoint. This is documented as
+        // broken (returns active rows) but the fallback is to filter
+        // the full list ourselves for cashPnl != 0 which marks settled.
+        const allPos = await dataApi.getAllPositions(cand.proxy_wallet);
+        // A position with cashPnl != 0 has settled — either won or lost.
+        // An active position with positive unrealized value has cashPnl=0.
+        resolvedPositions = allPos.filter(p => {
+          const pnl = Number(p.cashPnl);
+          return Number.isFinite(pnl) && pnl !== 0;
+        });
+      } catch (err) {
+        console.log(`    ERROR fetching positions: ${err instanceof Error ? err.message : String(err)}`);
+        errored++;
+        continue;
+      }
+
+      const settled_markets = resolvedPositions.length;
+      const wins = resolvedPositions.filter(p => Number(p.cashPnl) > 0).length;
+      const win_rate = settled_markets > 0 ? wins / settled_markets : 0;
+
+      // Category count: group by eventSlug prefix (first word of slug)
+      const categories = new Set<string>();
+      for (const p of resolvedPositions) {
+        const slug = p.slug ?? '';
+        const firstWord = slug.split('-')[0] ?? 'unknown';
+        categories.add(firstWord);
+      }
+      const category_count = categories.size;
+
+      // Uniform sizing check: compute stddev of initialValue across
+      // positions. If stddev / mean < 0.1, the wallet bets uniform sizes
+      // (leaderboard farming). We flag that as a fail signal.
+      let uniform_sizing = false;
+      if (resolvedPositions.length >= 10) {
+        const values = resolvedPositions.map(p => Number(p.initialValue) || 0).filter(v => v > 0);
+        if (values.length >= 10) {
+          const mean = values.reduce((s, v) => s + v, 0) / values.length;
+          const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+          const stddev = Math.sqrt(variance);
+          const coefVar = mean > 0 ? stddev / mean : 0;
+          uniform_sizing = coefVar < 0.1;
+        }
+      }
+
+      // Apply the 4 Bravado thresholds
+      const pass_n = settled_markets >= 200;
+      const pass_wr = win_rate >= 0.65;
+      const pass_varied = !uniform_sizing;
+      const pass_category = category_count >= 3;
+      const passed_all = pass_n && pass_wr && pass_varied && pass_category;
+
+      console.log(
+        `    n=${settled_markets} ` +
+          `wr=${(win_rate * 100).toFixed(1)}% ` +
+          `cats=${category_count} ` +
+          `uniform=${uniform_sizing} ` +
+          `→ ${passed_all ? 'PASS' : 'FAIL'}`,
+      );
+      console.log(
+        `    gates: n>=200=${pass_n}  wr>=65%=${pass_wr}  varied=${pass_varied}  cats>=3=${pass_category}`,
+      );
+
+      if (!opts.dryRun) {
+        try {
+          recordFilterResult(
+            cand.proxy_wallet,
+            {
+              settled_markets,
+              win_rate,
+              category_count,
+              uniform_sizing,
+            },
+            passed_all,
+          );
+          if (passed_all) {
+            promoteWhale({
+              proxy_wallet: cand.proxy_wallet,
+              pseudonym: cand.pseudonym,
+              promoted_by: 'smart-money-filter',
+              reason: `auto-promoted: n=${settled_markets} wr=${(win_rate * 100).toFixed(1)}% cats=${category_count}`,
+            });
+          }
+        } catch (err) {
+          console.log(`    DB update failed: ${err instanceof Error ? err.message : String(err)}`);
+          errored++;
+          continue;
+        }
+      }
+
+      if (passed_all) passed++;
+      else failed++;
+
+      console.log();
+    }
+
+    console.log(`=== Summary ===`);
+    console.log(`Passed: ${passed}`);
+    console.log(`Failed: ${failed}`);
+    console.log(`Errors: ${errored}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(errored > 0 ? 1 : 0);
+  });
+
+// ─── WHALE-SEED ─────────────────────────────────────────────
+// Manual whitelist seed. Used to bootstrap the whale-copy strategy
+// before the smart-money-filter has enough candidate data to promote
+// survivors automatically.
+//
+// Usage:
+//   polybot whale-seed --wallet 0x1f2dd6d473f3e824cd2f8a89d9c69fb96f6ad0cf --name Fredi9999 --reason "2024-election-research"
+//   polybot whale-seed --wallet 0x... --copy-multiplier 0.5
+program
+  .command('whale-seed')
+  .description('Manually add a wallet to whitelisted_whales (bootstrap before filter has data)')
+  .requiredOption('--wallet <address>', '0x-prefixed proxy wallet address')
+  .option('--name <pseudonym>', 'Display name for dashboards')
+  .option('--reason <reason>', 'Why this wallet is whitelisted', 'manual seed')
+  .option('--copy-multiplier <n>', 'Size multiplier applied to copied trades (0-2.0)', '1.0')
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const { promoteWhale, seedCandidateSkeleton, getWhale } = await import('../storage/repositories/smart-money-repo.js');
+
+    const wallet = opts.wallet.toLowerCase();
+    if (!wallet.startsWith('0x') || wallet.length !== 42) {
+      console.error(`Invalid wallet address: ${opts.wallet}`);
+      process.exit(1);
+    }
+    const multiplier = Number(opts.copyMultiplier);
+    if (!Number.isFinite(multiplier) || multiplier < 0 || multiplier > 2) {
+      console.error(`copy-multiplier must be a number in [0, 2.0]`);
+      process.exit(1);
+    }
+
+    // Ensure a candidate skeleton exists so the FK from whitelisted_whales
+    // has a target.
+    seedCandidateSkeleton(wallet, opts.name ?? null);
+    promoteWhale({
+      proxy_wallet: wallet,
+      pseudonym: opts.name ?? null,
+      promoted_by: 'manual',
+      reason: opts.reason,
+      copy_multiplier: multiplier,
+    });
+
+    const whale = getWhale(wallet);
+    console.log(`\n=== Whale seeded ===`);
+    console.log(`Wallet:     ${whale?.proxy_wallet}`);
+    console.log(`Pseudonym:  ${whale?.pseudonym ?? '-'}`);
+    console.log(`Reason:     ${whale?.reason}`);
+    console.log(`Multiplier: ${whale?.copy_multiplier}`);
+    console.log(`Active:     ${whale?.active === 1}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(0);
+  });
+
 // ─── REDEEM-ALL ─────────────────────────────────────────────
 // Phase -1 fix (2026-04-11): prod had 33 redeemable positions on-chain
 // worth ~$48.96 sitting in the CTF contract, never flowed back to the

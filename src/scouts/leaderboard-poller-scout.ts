@@ -32,6 +32,7 @@
 
 import type { MarketCache } from '../market/market-cache.js';
 import { ScoutBase, type ScoutRunResult } from './scout-base.js';
+import { upsertCandidate, expireStaleCandidates } from '../storage/repositories/smart-money-repo.js';
 import { createChildLogger } from '../core/logger.js';
 
 const LEADERBOARD_URL = 'https://data-api.polymarket.com/leaderboards?window=week';
@@ -63,6 +64,7 @@ export class LeaderboardPollerScout extends ScoutBase {
     'Polls data-api.polymarket.com/leaderboards every 10 min and upserts whale candidates';
 
   private lastPollAt = 0;
+  private pollCount = 0;
 
   constructor() {
     super();
@@ -99,9 +101,15 @@ export class LeaderboardPollerScout extends ScoutBase {
   }
 
   private async pollAsync(): Promise<void> {
+    this.pollCount++;
     try {
       const response = await fetch(LEADERBOARD_URL, {
-        headers: { accept: 'application/json' },
+        // Data API rejects default node fetch UA with 403; use a browser
+        // UA. Same fix as DataApiClient.fetchJson from earlier today.
+        headers: {
+          accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; polybot-v3/1.0)',
+        },
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) {
@@ -115,17 +123,50 @@ export class LeaderboardPollerScout extends ScoutBase {
         return;
       }
 
-      // STAGED: upsert to smart_money_candidates table.
-      // When Phase C1 tables are created, this will be:
-      //   upsertCandidate({proxyWallet, pseudonym, weekly_profit_usd, ...})
-      // For now we just log.
+      // Upsert every leaderboard entry into smart_money_candidates. The
+      // filter CLI (polybot smart-money-filter) runs separately to decide
+      // which candidates get promoted to whitelisted_whales.
+      let upserted = 0;
+      for (const entry of entries) {
+        try {
+          upsertCandidate({
+            proxy_wallet: entry.proxyWallet,
+            pseudonym: entry.pseudonym,
+            weekly_profit_usd: entry.amount,
+            all_time_pnl_usd: entry.pnl,
+            total_volume_usd: entry.volume,
+          });
+          upserted++;
+        } catch (err) {
+          this.log.warn(
+            { err: err instanceof Error ? err.message : String(err), wallet: entry.proxyWallet?.substring(0, 12) },
+            'Candidate upsert failed',
+          );
+        }
+      }
+
+      // Periodic expiration of stale candidates. Wallets that haven't
+      // appeared on the leaderboard in 7+ days get marked 'expired' so
+      // the filter job stops re-evaluating them. Runs every ~60 polls
+      // (~10 hours at 10-min cadence) to amortize cost.
+      let expired = 0;
+      if (this.pollCount % 60 === 0) {
+        try {
+          expired = expireStaleCandidates(7 * 24 * 60 * 60 * 1000);
+        } catch (err) {
+          this.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Stale candidate expiration failed');
+        }
+      }
+
       this.log.info(
         {
           entries: entries.length,
+          upserted,
+          expired,
           top_wallet: entries[0]?.proxyWallet?.substring(0, 12) ?? null,
           top_amount: entries[0]?.amount ?? null,
         },
-        'Leaderboard polled (STAGED — upsert not yet wired)',
+        'Leaderboard polled',
       );
     } catch (err) {
       this.log.warn({ err: err instanceof Error ? err.message : String(err) }, 'Leaderboard poll error');

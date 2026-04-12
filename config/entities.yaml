@@ -48,6 +48,11 @@ entities:
       - sportsbook_fade
       - cross_market
       - macro_forecast
+      # Phase C2 (2026-04-11): whale_copy strategy exists in the code
+      # and is registered in the engine, but is NOT in this active list.
+      # To activate, UNCOMMENT the next line AND set WHALE_COPY_ENABLED=true
+      # in /opt/polybot-v3/.env. See docs/todo.md WHALE ACTIVATION PLAYBOOK.
+      # - whale_copy
 
   - slug: armorstack
     name: "GC Armorstack"

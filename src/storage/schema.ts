@@ -358,6 +358,96 @@ CREATE INDEX IF NOT EXISTS idx_si_active ON scout_intel(expires_at);
 CREATE INDEX IF NOT EXISTS idx_si_condition ON scout_intel(condition_id);
 CREATE INDEX IF NOT EXISTS idx_si_scout ON scout_intel(created_by);
 
+-- ─── SMART MONEY CANDIDATES (Whale Tracking — Phase C1a, 2026-04-11) ─
+-- The LeaderboardPollerScout hits data-api.polymarket.com/leaderboards
+-- every 10 minutes and upserts rows here keyed by proxy_wallet. Each row
+-- tracks the wallet's most recent weekly profit, all-time realized PnL,
+-- total volume, and pseudonym. A nightly filter job (CLI command
+-- 'polybot smart-money-filter') walks every row, queries the Data API
+-- for each wallet's full resolved-position history, applies the Bravado
+-- Trade 4-threshold filter (>=200 settled markets, >=65% WR, varied
+-- sizing, cross-category) and promotes survivors to whitelisted_whales.
+--
+-- status values:
+--   'candidate' — appeared on leaderboard, not yet evaluated by filter
+--   'passed'    — filter job promoted it (also appears in whitelisted_whales)
+--   'failed'    — filter job evaluated and rejected
+--   'expired'   — hasn't been seen on the leaderboard in >7 days
+CREATE TABLE IF NOT EXISTS smart_money_candidates (
+    proxy_wallet          TEXT    PRIMARY KEY,
+    pseudonym             TEXT,
+    weekly_profit_usd     REAL    NOT NULL DEFAULT 0,
+    all_time_pnl_usd      REAL    NOT NULL DEFAULT 0,
+    total_volume_usd      REAL    NOT NULL DEFAULT 0,
+    first_seen_at         INTEGER NOT NULL,
+    last_seen_at          INTEGER NOT NULL,
+    last_filter_run_at    INTEGER,
+    settled_markets       INTEGER NOT NULL DEFAULT 0,
+    win_rate              REAL    NOT NULL DEFAULT 0,
+    category_count        INTEGER NOT NULL DEFAULT 0,
+    uniform_sizing        INTEGER NOT NULL DEFAULT 0,
+    status                TEXT    NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate', 'passed', 'failed', 'expired'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_smc_status ON smart_money_candidates(status);
+CREATE INDEX IF NOT EXISTS idx_smc_last_seen ON smart_money_candidates(last_seen_at);
+
+-- ─── WHITELISTED WHALES (Whale Tracking — Phase C1a, 2026-04-11) ─────
+-- Subset of smart_money_candidates that passed the filter AND have been
+-- approved (either by the filter job automatically or by the operator
+-- manually via CLI). The whale-copy strategy ONLY copies trades from
+-- wallets in this table. Seeding happens via either:
+--   1. `polybot smart-money-filter` — nightly job, auto-promotes filter passers
+--   2. `polybot whale-seed --wallet 0x... [--reason ...]` — manual seed
+--
+-- Manual seeds are how we bootstrap before the filter has enough data
+-- (e.g. seeding Fredi9999 from the 2024 election research).
+CREATE TABLE IF NOT EXISTS whitelisted_whales (
+    proxy_wallet     TEXT    PRIMARY KEY,
+    pseudonym        TEXT,
+    promoted_at      INTEGER NOT NULL,
+    promoted_by      TEXT    NOT NULL,  -- 'smart-money-filter' or 'manual'
+    reason           TEXT,
+    active           INTEGER NOT NULL DEFAULT 1,
+    copy_multiplier  REAL    NOT NULL DEFAULT 1.0 CHECK(copy_multiplier BETWEEN 0 AND 2.0),
+    last_trade_seen  INTEGER,
+    trades_copied    INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (proxy_wallet) REFERENCES smart_money_candidates(proxy_wallet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ww_active ON whitelisted_whales(active) WHERE active = 1;
+
+-- ─── WHALE TRADES (Whale Tracking — Phase C1a, 2026-04-11) ───────────
+-- Log of every whale trade the event tracker observes. Used for:
+--   (a) audit trail — we saw trade X at time Y, took action Z
+--   (b) dedup — don't copy the same trade twice
+--   (c) latency measurement — whale_ts vs our_action_ts
+--   (d) attribution — which whale's trades we copied, which we skipped
+CREATE TABLE IF NOT EXISTS whale_trades (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    proxy_wallet          TEXT    NOT NULL,
+    condition_id          TEXT    NOT NULL,
+    token_id              TEXT    NOT NULL,
+    side                  TEXT    NOT NULL CHECK(side IN ('BUY', 'SELL')),
+    outcome               TEXT    NOT NULL CHECK(outcome IN ('YES', 'NO')),
+    size                  REAL    NOT NULL,
+    price                 REAL    NOT NULL,
+    usdc_size             REAL    NOT NULL,
+    block_number          INTEGER NOT NULL,
+    tx_hash               TEXT    NOT NULL,
+    observed_at           INTEGER NOT NULL,
+    -- action we took in response
+    action                TEXT    NOT NULL CHECK(action IN ('copied', 'skipped_latency', 'skipped_fair_value', 'skipped_dedup', 'skipped_illiquid', 'skipped_not_whitelisted', 'skipped_other')),
+    action_reason         TEXT,
+    our_signal_id         TEXT,
+    FOREIGN KEY (proxy_wallet) REFERENCES smart_money_candidates(proxy_wallet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wt_wallet ON whale_trades(proxy_wallet);
+CREATE INDEX IF NOT EXISTS idx_wt_condition ON whale_trades(condition_id);
+CREATE INDEX IF NOT EXISTS idx_wt_observed ON whale_trades(observed_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wt_txhash ON whale_trades(tx_hash, token_id);
+
 -- ─── VIEWS ──────────────────────────────────────────────────
 
 CREATE VIEW IF NOT EXISTS v_entity_pnl AS
@@ -546,16 +636,16 @@ export function applySchema(db: Database.Database): void {
   // we explicitly verify the tables exist here to surface any migration
   // failure in the logs rather than silently continuing.
   try {
-    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('market_priorities','scout_intel')`).all() as Array<{ name: string }>;
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('market_priorities','scout_intel','smart_money_candidates','whitelisted_whales','whale_trades')`).all() as Array<{ name: string }>;
     const names = new Set(tables.map(t => t.name));
-    if (!names.has('market_priorities')) {
-      log.warn('market_priorities table missing after DDL apply — this should not happen');
-    }
-    if (!names.has('scout_intel')) {
-      log.warn('scout_intel table missing after DDL apply — this should not happen');
+    const required = ['market_priorities', 'scout_intel', 'smart_money_candidates', 'whitelisted_whales', 'whale_trades'];
+    for (const r of required) {
+      if (!names.has(r)) {
+        log.warn({ table: r }, 'Required table missing after DDL apply — this should not happen');
+      }
     }
   } catch (err) {
-    log.warn({ err }, 'priority/intel table verification failed');
+    log.warn({ err }, 'priority/intel/whale table verification failed');
   }
 
   // Force-recreate views on every startup so edits to the DDL take effect.

@@ -23,6 +23,7 @@ import { VolumeSpikeScout } from './volume-spike-scout.js';
 import { PriceJumpScout } from './price-jump-scout.js';
 import { NewListingScout } from './new-listing-scout.js';
 import { LlmNewsScout } from './llm-news-scout.js';
+import { LeaderboardPollerScout } from './leaderboard-poller-scout.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('scout-coordinator');
@@ -52,11 +53,17 @@ export class ScoutCoordinator {
   }
 
   private registerDefaultScouts(): void {
+    // 2026-04-11 Phase C1a: LeaderboardPollerScout added but DEFAULT
+    // DISABLED. Activation requires explicit operator opt-in via the
+    // scouts.disabled_scouts yaml list (remove 'leaderboard-poller-scout'
+    // from the list). See docs/todo.md WHALE ACTIVATION PLAYBOOK for
+    // the full flip-on sequence.
     const all: ScoutBase[] = [
       new VolumeSpikeScout(),
       new PriceJumpScout(),
       new NewListingScout(),
       new LlmNewsScout(),
+      new LeaderboardPollerScout(),
     ];
     this.scouts = all.filter(s => !this.config.disabled_scouts.includes(s.id));
     log.info(

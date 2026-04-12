@@ -73,4 +73,6 @@ priority_scanner:
 scouts:
   enabled: true
   interval_ms: 60000
-  disabled_scouts: []
+  # 2026-04-11: LeaderboardPollerScout disabled by default — same as prod.
+  disabled_scouts:
+    - leaderboard-poller-scout

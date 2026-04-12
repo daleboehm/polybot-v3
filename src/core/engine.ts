@@ -34,6 +34,8 @@ import { ConvergenceStrategy } from '../strategy/custom/convergence.js';
 import { SportsbookFadeStrategy } from '../strategy/custom/sportsbook-fade.js';
 import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-divergence.js';
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
+import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
+import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { OddsApiClient } from '../market/odds-api-client.js';
 import { KalshiClient } from '../market/kalshi-client.js';
 import { FredClient } from '../market/fred-client.js';
@@ -80,6 +82,10 @@ export class Engine {
   private priorityScanner: PriorityScanner | null = null;
   // Phase 4 (2026-04-11): in-process scout fleet
   private scoutCoordinator: ScoutCoordinator | null = null;
+  // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
+  // Starts only when WHALE_COPY_ENABLED=true AND at least one row exists
+  // in whitelisted_whales. See docs/todo.md for the activation playbook.
+  private whaleSubscriber: WhaleEventSubscriber | null = null;
 
   private scanInterval: ReturnType<typeof setInterval> | null = null;
   private riskCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -132,6 +138,13 @@ export class Engine {
     this.strategyRegistry.register(new SportsbookFadeStrategy(this.oddsApiClient));
     this.strategyRegistry.register(new CrossMarketDivergenceStrategy(this.kalshiClient));
     this.strategyRegistry.register(new MacroForecastStrategy(this.fredClient));
+
+    // Phase C2 (2026-04-11): whale-copy strategy. DORMANT by default —
+    // its shouldRun() returns false unless WHALE_COPY_ENABLED=true env
+    // var is set. Registering it here doesn't activate it; it just makes
+    // the strategy loadable. See docs/todo.md WHALE ACTIVATION PLAYBOOK
+    // for the full flip-on sequence.
+    this.strategyRegistry.register(new WhaleCopyStrategy());
 
     // Strategy advisor (must be after strategyRegistry is populated)
     this.strategyAdvisor = new StrategyAdvisor(config.advisor, this.entityManager, this.strategyRegistry);
@@ -375,6 +388,19 @@ export class Engine {
       this.scoutCoordinator.start(this.marketCache);
     }
 
+    // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
+    // Only starts when:
+    //   (a) WHALE_COPY_ENABLED=true env var is set, AND
+    //   (b) the whale subscriber's own start() method finds at least
+    //       one row in whitelisted_whales.
+    // Both gates are the subscriber's responsibility — we just call
+    // start() unconditionally when the flag is on, and it silently
+    // skips if there are no whales to watch.
+    if (process.env.WHALE_COPY_ENABLED === 'true') {
+      this.whaleSubscriber = new WhaleEventSubscriber();
+      this.whaleSubscriber.start();
+    }
+
     // R3b: start Telegram alerter (subscribes to event bus for kill-switch + engine events)
     this.alerter.start();
 
@@ -400,6 +426,7 @@ export class Engine {
     if (this.advisorInterval) clearInterval(this.advisorInterval);
     if (this.priorityScanner) this.priorityScanner.stop();
     if (this.scoutCoordinator) this.scoutCoordinator.stop();
+    if (this.whaleSubscriber) this.whaleSubscriber.stop();
     this.alerter.stop();
 
     this.samplingPoller.stop();

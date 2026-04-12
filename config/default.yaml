@@ -138,4 +138,9 @@ priority_scanner:
 scouts:
   enabled: true
   interval_ms: 60000              # 60 seconds between ticks
-  disabled_scouts: []
+  # 2026-04-11: LeaderboardPollerScout is DISABLED by default. It's
+  # wired into ScoutCoordinator + registered + unstubbed, but sleeps
+  # until you remove 'leaderboard-poller-scout' from this list. See
+  # docs/todo.md WHALE ACTIVATION PLAYBOOK for the flip-on sequence.
+  disabled_scouts:
+    - leaderboard-poller-scout
