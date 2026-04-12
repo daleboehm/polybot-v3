@@ -167,9 +167,13 @@ export class LlmNewsScout extends ScoutBase {
     }
 
     const candidates = this.getCandidateMarkets(marketCache);
+    if (candidates.length === 0) {
+      this.log.debug('LLM scout: zero candidate markets from cache');
+      return this.emptyResult();
+    }
     const sorted = [...candidates].sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0));
     const sample = sorted.slice(0, MAX_MARKETS_PER_CALL);
-    if (sample.length === 0) return this.emptyResult();
+    this.log.info({ candidates: candidates.length, sample: sample.length }, 'LLM scout dispatching API call');
 
     // Fire-and-forget the API call so the scout coordinator's 60s tick
     // doesn't wait on it. The async work writes intel/priority rows
@@ -194,6 +198,7 @@ export class LlmNewsScout extends ScoutBase {
   }
 
   private async runAsync(sample: MarketData[]): Promise<void> {
+    this.log.info({ sample_size: sample.length }, 'LLM scout async call starting');
     try {
       const findings = await this.callClaude(sample);
       if (findings.length === 0) {
