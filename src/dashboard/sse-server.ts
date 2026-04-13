@@ -472,7 +472,7 @@ header { background: #0a0e17; border-bottom: 2px solid #f6ad55; padding: 16px 24
 a.back { color: #a0aec0; text-decoration: none; font-size: 0.85em; padding: 6px 12px; border-radius: 6px; border: 1px solid #2d3748; }
 a.back:hover { background: #1a1f2e; color: #e2e8f0; }
 .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
-.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; position: sticky; top: 72px; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 14px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: nowrap; overflow-x: auto; position: sticky; top: 72px; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
 .sb-item { display: flex; flex-direction: column; }
 .sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 6px; }
 .sb-value { font-size: 22px; font-weight: 700; }
