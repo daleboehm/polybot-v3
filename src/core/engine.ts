@@ -36,6 +36,7 @@ import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-d
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
 import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
+import { FastCryptoEvaluator } from './fast-crypto-evaluator.js';
 import { OddsApiClient } from '../market/odds-api-client.js';
 import { KalshiClient } from '../market/kalshi-client.js';
 import { FredClient } from '../market/fred-client.js';
@@ -83,9 +84,10 @@ export class Engine {
   // Phase 4 (2026-04-11): in-process scout fleet
   private scoutCoordinator: ScoutCoordinator | null = null;
   // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
-  // Starts only when WHALE_COPY_ENABLED=true AND at least one row exists
-  // in whitelisted_whales. See docs/todo.md for the activation playbook.
   private whaleSubscriber: WhaleEventSubscriber | null = null;
+  // Tier 1 infrastructure (2026-04-13): fast crypto evaluator. Triggers
+  // crypto_price strategy on BTC markets within 10s of orderbook change.
+  private fastCryptoEvaluator: FastCryptoEvaluator | null = null;
 
   private scanInterval: ReturnType<typeof setInterval> | null = null;
   private riskCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -399,6 +401,27 @@ export class Engine {
     if (process.env.WHALE_COPY_ENABLED === 'true') {
       this.whaleSubscriber = new WhaleEventSubscriber();
       this.whaleSubscriber.start();
+    }
+
+    // Tier 1 infrastructure (2026-04-13): fast crypto evaluator. Listens
+    // for orderbook:snapshot events on BTC markets and triggers
+    // crypto_price strategy within 10 seconds of a book change — 30x
+    // faster than the 5-minute scan cycle. Only active when the
+    // OrderbookWebSocket is connected (config.engine.orderbook_subscribe).
+    if (this.config.engine.orderbook_subscribe) {
+      this.fastCryptoEvaluator = new FastCryptoEvaluator({
+        entityManager: this.entityManager,
+        strategyRegistry: this.strategyRegistry,
+        marketCache: this.marketCache,
+        riskEngine: this.riskEngine,
+        clobRouter: this.clobRouter,
+        riskLimits: this.config.risk,
+        executionConfig: {
+          slippage_bps: this.config.execution.slippage_bps,
+          bid_premium_pct: this.config.execution.bid_premium_pct,
+        },
+      });
+      this.fastCryptoEvaluator.start();
     }
 
     // R3b: start Telegram alerter (subscribes to event bus for kill-switch + engine events)
