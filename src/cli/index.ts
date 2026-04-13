@@ -891,6 +891,7 @@ program
     const { createWalletClient, http } = await import('viem');
     const { polygon } = await import('viem/chains');
     const { privateKeyToAccount } = await import('viem/accounts');
+    const { getPrimaryRpc } = await import('../market/rpc-config.js');
     const privateKeyHex = creds.private_key.startsWith('0x')
       ? creds.private_key as `0x${string}`
       : `0x${creds.private_key}` as `0x${string}`;
@@ -898,7 +899,7 @@ program
     const walletClient = createWalletClient({
       account,
       chain: polygon,
-      transport: http('https://polygon.drpc.org'),
+      transport: http(getPrimaryRpc()),
     });
     const client = new ClobClient(
       config.api.clob_base_url,

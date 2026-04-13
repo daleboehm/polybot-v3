@@ -43,16 +43,9 @@ const USDC_ABI = parseAbi([
   'function balanceOf(address account) view returns (uint256)',
 ]);
 
-// Ordered list of Polygon RPCs. On failure we fall through to the next.
-// 2026-04-10: removed `rpc.ankr.com/polygon` (now requires API key, returns 401)
-// and `polygon.meowrpc.com` (404s). Kept drpc and publicnode which still work anonymously.
-// Added polygon-rpc.com (the canonical public RPC) as a first-choice.
-const DEFAULT_POLYGON_RPCS: string[] = [
-  'https://polygon-rpc.com',
-  'https://polygon.drpc.org',
-  'https://polygon-bor-rpc.publicnode.com',
-  'https://rpc.polygon.io',
-];
+// 2026-04-13: RPC URLs now centralized in src/market/rpc-config.ts.
+// Set POLYGON_RPC_URL in .env for Alchemy/paid endpoint as primary.
+import { getPolygonRpcs } from '../market/rpc-config.js';
 
 export interface RedemptionResult {
   success: boolean;
@@ -73,7 +66,7 @@ export class NegRiskRedeemer {
     if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
       throw new Error('NegRiskRedeemer: privateKey must be a 0x-prefixed 32-byte hex string');
     }
-    this.rpcUrls = rpcUrls && rpcUrls.length > 0 ? rpcUrls : DEFAULT_POLYGON_RPCS;
+    this.rpcUrls = rpcUrls && rpcUrls.length > 0 ? rpcUrls : getPolygonRpcs();
   }
 
   /**

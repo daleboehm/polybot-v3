@@ -69,12 +69,7 @@ const ORDER_FILLED_EVENT = parseAbiItem(
   'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
 );
 
-const DEFAULT_RPCS = [
-  'https://polygon-rpc.com',
-  'https://polygon.drpc.org',
-  'https://polygon-bor-rpc.publicnode.com',
-  'https://rpc.polygon.io',
-];
+import { getPolygonRpcs } from './rpc-config.js';
 
 export interface WhaleEventSubscriberConfig {
   /** Poll interval in ms. Default 60s. */
@@ -121,7 +116,7 @@ export class WhaleEventSubscriber {
 
   private getClient(): PublicClient {
     if (this.client) return this.client;
-    const rpcs = this.config.rpc_urls ?? DEFAULT_RPCS;
+    const rpcs = this.config.rpc_urls ?? getPolygonRpcs();
     const url = rpcs[this.rpcIndex % rpcs.length];
     if (!url) throw new Error('No RPC URLs configured');
     this.client = createPublicClient({ chain: polygon, transport: http(url) });
