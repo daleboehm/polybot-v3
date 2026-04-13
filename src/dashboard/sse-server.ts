@@ -565,10 +565,15 @@ async function load() {
       if (isNaN(d.getTime())) return '<span style="color:#718096">Unknown</span>';
       var now = Date.now();
       var diff = d.getTime() - now;
-      if (diff < 0) return '<span style="color:#10b981">Overdue</span>';
+      if (diff < 0) {
+        var hrsOver = Math.round(Math.abs(diff) / 3600000);
+        if (hrsOver < 48) return '<span style="color:#f6ad55" title="Normal 24-48h oracle window">&#9203; Settling ('+hrsOver+'h)</span>';
+        if (hrsOver < 168) return '<span style="color:#fb923c" title="Resolution delayed">&#9888; Slow ('+Math.round(hrsOver/24)+'d)</span>';
+        return '<span style="color:#ef4444" title="Investigate">&#10060; Overdue ('+Math.round(hrsOver/24)+'d)</span>';
+      }
       var hours = Math.floor(diff / 3600000);
       var days = Math.floor(hours / 24);
-      if (days > 0) return '<span style="color:'+(days <= 2 ? '#f6ad55' : '#718096')+'">'+days+'d '+( hours % 24)+'h</span>';
+      if (days > 0) return '<span style="color:'+(days <= 2 ? '#f6ad55' : '#718096')+'">'+days+'d '+(hours % 24)+'h</span>';
       return '<span style="color:#10b981">'+hours+'h</span>';
     }
     pb.innerHTML = positions.map(p => {
