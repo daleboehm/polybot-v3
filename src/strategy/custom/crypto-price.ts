@@ -34,9 +34,13 @@ const CONFIG = {
   min_edge: 0.05,
   min_confidence: 0.40,
   max_hours_to_resolve: 48,
-  min_hours_to_resolve: 1,
-  dedup_minutes: 120,
-  price_cache_ttl_ms: 5 * 60 * 1000, // 5 min
+  // 2026-04-13: lowered from 1.0 to 0.05 (3 minutes) to capture 5-min
+  // AND hourly BTC "Up or Down" markets. These use Chainlink auto-settlement
+  // and are the fastest-resolving markets on Polymarket. The exchange
+  // divergence scout + book quality check provide defensive gating.
+  min_hours_to_resolve: 0.05,
+  dedup_minutes: 10, // lowered from 120 — fast markets need faster re-entry
+  price_cache_ttl_ms: 60 * 1000, // 1 min (was 5 — need fresher for short-duration)
 };
 
 export class CryptoPriceStrategy extends BaseStrategy {
@@ -91,23 +95,35 @@ export class CryptoPriceStrategy extends BaseStrategy {
       const parsed = this.parseCryptoQuestion(market.question);
       if (!parsed) continue;
 
-      // Phase R2.1 (2026-04-12): Lummox_eth whale analysis confirmed BTC
-      // is the only crypto with sufficient Polymarket 5-min market depth.
-      // ETH/SOL markets have too-thin books and our liquidity sizer would
-      // reject most entries anyway. Hard-gate: only trade BTC markets.
-      // Keep parsing ETH/SOL so the data stays visible in logs/dashboards,
-      // but skip signal generation.
+      // Phase R2.1 (2026-04-12): BTC-only gate.
       if (parsed.coingeckoId !== 'bitcoin') continue;
 
-      // Get current price — Binance first (1-min cache), CoinGecko fallback (5-min)
+      // Get current price — Binance first (1-min cache), CoinGecko fallback
       let currentPrice = await getBinancePrice(parsed.coingeckoId);
       if (!currentPrice) currentPrice = await this.getPrice(parsed.coingeckoId);
       if (!currentPrice || currentPrice <= 0) continue;
 
+      // 2026-04-13: "Up or Down" markets — target is the BTC price at
+      // window open. We don't know the exact open price, but for a market
+      // that just opened, the current Binance spot is a close approximation.
+      // The YES price on the market implies the crowd's directional bet.
+      // Our edge: if the exchange consensus (3-source divergence scout)
+      // shows a directional lean that the market hasn't priced in yet.
+      //
+      // For "Up or Down" we set direction='above' since YES = "Up" and
+      // use current price as the target (a ~50/50 baseline that the
+      // volatility model adjusts based on recent momentum).
+      let effectiveTarget = parsed.target;
+      let effectiveDirection = parsed.direction;
+      if (parsed.isUpDown) {
+        effectiveTarget = currentPrice; // target IS current price
+        effectiveDirection = 'above';   // YES = "Up" = price goes above current
+      }
+
       // Calculate probability using volatility-adjusted normal distribution
       const vol = VOLATILITY[parsed.coingeckoId] ?? 0.70;
       const estimate = this.estimateProbability(
-        currentPrice, parsed.target, parsed.direction,
+        currentPrice, effectiveTarget, effectiveDirection,
         hoursToResolve, vol,
       );
 
@@ -251,7 +267,7 @@ export class CryptoPriceStrategy extends BaseStrategy {
     return signals;
   }
 
-  private parseCryptoQuestion(question: string): { coingeckoId: string; target: number; direction: string } | null {
+  private parseCryptoQuestion(question: string): { coingeckoId: string; target: number; direction: string; isUpDown?: boolean } | null {
     const q = question.toLowerCase();
 
     // Find asset
@@ -264,10 +280,22 @@ export class CryptoPriceStrategy extends BaseStrategy {
     }
     if (!coingeckoId) return null;
 
-    // Find target price and direction
+    // 2026-04-13: "Up or Down" format — fast-resolution markets with
+    // Chainlink auto-settlement. These don't have a price target in the
+    // question; the "target" is the BTC price at the start of the window.
+    // Format: "Bitcoin Up or Down - April 12, 7:10PM-7:15PM ET"
+    //         "Bitcoin Up or Down - April 9, 4:00AM-8:00AM ET"
+    // We return target=0 as a sentinel and set isUpDown=true so the
+    // caller knows to use the current Binance spot price as the target.
+    if (/up or down/i.test(question)) {
+      return { coingeckoId, target: 0, direction: 'up_or_down', isUpDown: true };
+    }
+
+    // Standard format: "Will the price of Bitcoin be above $74,000..."
     const patterns = [
       { regex: /above \$([0-9,]+)/i, direction: 'above' },
       { regex: /below \$([0-9,]+)/i, direction: 'below' },
+      { regex: /between \$([0-9,]+)/i, direction: 'between' },
       { regex: /reach \$([0-9,]+)/i, direction: 'reach' },
       { regex: /dip to \$([0-9,]+)/i, direction: 'dip' },
       { regex: /exceed \$([0-9,]+)/i, direction: 'above' },
