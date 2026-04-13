@@ -95,6 +95,11 @@ export class Engine {
   private advisorInterval: ReturnType<typeof setInterval> | null = null;
   private cycleCount = 0;
   private isRunning = false;
+  private lastCycleCompletedAt = 0;  // unix ms
+  private lastCycleSignals = 0;
+  private lastCycleOrders = 0;
+  private lastCycleDurationMs = 0;
+  private engineStartedAt = 0;
 
   constructor(private config: AppConfig) {
     this.entityManager = new EntityManager(config);
@@ -430,6 +435,35 @@ export class Engine {
     // R3b: metrics registry wires itself to the event bus on construction — no explicit start needed
 
     this.isRunning = true;
+    this.engineStartedAt = Date.now();
+
+    // Layer 1 monitoring (2026-04-13): watchdog timer that checks every
+    // 2 minutes if the scan cycle has gone stale (> 2x scan interval).
+    // Fires a Telegram alert so Dale knows something is wrong without
+    // having to check the dashboard.
+    setInterval(() => {
+      if (!this.isRunning || this.lastCycleCompletedAt === 0) return;
+      const msSinceCycle = Date.now() - this.lastCycleCompletedAt;
+      const threshold = this.config.engine.scan_interval_ms * 2;
+      if (msSinceCycle > threshold) {
+        const minsSince = Math.round(msSinceCycle / 60000);
+        log.error(
+          { mins_since_cycle: minsSince, threshold_mins: Math.round(threshold / 60000) },
+          'WATCHDOG: scan cycle stale',
+        );
+        this.alerter.send({
+          severity: 'critical',
+          component: 'watchdog',
+          title: `Scan cycle stale (${minsSince}min since last cycle)`,
+          details: {
+            last_cycle_at: new Date(this.lastCycleCompletedAt).toISOString(),
+            cycles_completed: this.cycleCount,
+            threshold_min: Math.round(threshold / 60000),
+          },
+        });
+      }
+    }, 120_000); // check every 2 minutes
+
     eventBus.emit('engine:started', { timestamp: new Date() });
     log.info({
       entities: this.entityManager.getAllEntities().length,
@@ -739,6 +773,11 @@ export class Engine {
     }
 
     const duration = Date.now() - cycleStart;
+    this.lastCycleCompletedAt = Date.now();
+    this.lastCycleSignals = totalSignals;
+    this.lastCycleOrders = totalOrders;
+    this.lastCycleDurationMs = duration;
+
     eventBus.emit('engine:cycle_complete', {
       cycle: this.cycleCount,
       duration_ms: duration,
@@ -981,9 +1020,19 @@ export class Engine {
   }
 
   getStats() {
+    const now = Date.now();
+    const msSinceLastCycle = this.lastCycleCompletedAt > 0 ? now - this.lastCycleCompletedAt : null;
     return {
       running: this.isRunning,
       cycles: this.cycleCount,
+      uptime_ms: this.engineStartedAt > 0 ? now - this.engineStartedAt : 0,
+      last_cycle_at: this.lastCycleCompletedAt > 0 ? new Date(this.lastCycleCompletedAt).toISOString() : null,
+      ms_since_last_cycle: msSinceLastCycle,
+      last_cycle_signals: this.lastCycleSignals,
+      last_cycle_orders: this.lastCycleOrders,
+      last_cycle_duration_ms: this.lastCycleDurationMs,
+      // Health flag: cycle is stale if > 2x the scan interval has passed
+      cycle_stale: msSinceLastCycle !== null && msSinceLastCycle > this.config.engine.scan_interval_ms * 2,
       entities: this.entityManager.getAllEntities().length,
       active_entities: this.entityManager.getActiveEntities().length,
       strategies: this.strategyRegistry.size,
@@ -991,8 +1040,10 @@ export class Engine {
       markets_active: this.marketCache.getActive().length,
       ws_connected: this.orderbookWs.connected,
       ws_subscriptions: this.orderbookWs.subscribedCount,
+      fast_crypto_stats: this.fastCryptoEvaluator?.getStats() ?? null,
       event_stats: eventBus.getStats(),
       advisor_enabled: this.config.advisor.enabled,
+      kill_switch: killSwitch.status(),
     };
   }
 }
