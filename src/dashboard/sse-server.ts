@@ -237,6 +237,31 @@ export class DashboardServer {
         return;
       }
 
+      // Health endpoint — unauthenticated so external monitors can ping it.
+      // Returns a simple JSON with status + staleness flag. UptimeRobot or
+      // any HTTP monitor checks this every 60s and alerts on non-200.
+      if (path === '/api/health') {
+        const stats = this.engine.getStats();
+        const healthy = stats.running && !stats.cycle_stale && !stats.kill_switch?.halted;
+        const status = healthy ? 200 : 503;
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({
+          status: healthy ? 'healthy' : 'unhealthy',
+          running: stats.running,
+          cycle_stale: stats.cycle_stale,
+          ms_since_last_cycle: stats.ms_since_last_cycle,
+          last_cycle_at: stats.last_cycle_at,
+          cycles: stats.cycles,
+          uptime_ms: stats.uptime_ms,
+          ws_connected: stats.ws_connected,
+          kill_switch_halted: stats.kill_switch?.halted ?? false,
+          strategies: stats.strategies,
+          markets_active: stats.markets_active,
+          fast_crypto: stats.fast_crypto_stats,
+        }));
+        return;
+      }
+
       // API routes
       if (path === '/api/status')      return this.jsonResponse(res, this.engine.getStats());
       if (path === '/api/entities')    return this.jsonResponse(res, getEntityPnlView());
