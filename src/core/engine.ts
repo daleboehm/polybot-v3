@@ -476,12 +476,18 @@ export class Engine {
     // on Data API errors: the entity gets added to entitiesSkippedThisCycle and its
     // strategies will NOT run this cycle.
     for (const entity of this.entityManager.getAllEntities()) {
-      if (!entity.credentials?.proxy_address) continue; // paper-only entity, skip
+      // Use proxy_address if set, else fall back to account_address (same
+      // logic as the startup wallet-sync path). The prior code checked ONLY
+      // proxy_address which was null for the polybot entity — this caused
+      // the reconciler to silently skip prod EVERY CYCLE for 36+ hours,
+      // leaving 34 redeemable positions ($114.52) undetected in the DB.
+      const walletForReconcile = entity.credentials?.proxy_address || entity.credentials?.account_address;
+      if (!walletForReconcile) continue; // genuinely no wallet (paper entity)
       try {
         const redeemer = this.getRedeemer(entity.config.slug);
         const result = await this.reconciler.reconcileEntity(
           entity.config.slug,
-          entity.credentials.proxy_address,
+          walletForReconcile,
           redeemer,
         );
         if (!result.apiReachable) {
