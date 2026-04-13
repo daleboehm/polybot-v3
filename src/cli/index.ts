@@ -885,7 +885,11 @@ program
     }
 
     // Initialize the CLOB client for sell orders
-    const { ClobClient } = await import('@polymarket/clob-client');
+    // Dynamic import of the CLOB client + its Side enum. The SDK
+    // exports Side as an enum with Side.BUY / Side.SELL values. We
+    // need to use the enum member, not a string literal.
+    const mod = await import('@polymarket/clob-client');
+    const { ClobClient } = mod;
     const client = new ClobClient(
       config.api.clob_base_url,
       137, // Polygon chain ID
@@ -909,7 +913,7 @@ program
           tokenID: p.token_id,
           price: 0.01, // effectively market sell — matches any bid
           size: p.size,
-          side: 'SELL' as const,
+          side: mod.Side.SELL,
         };
         const signedOrder = await client.createOrder(userOrder);
         const response = await client.postOrder(signedOrder);
