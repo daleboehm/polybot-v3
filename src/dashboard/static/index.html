@@ -20,7 +20,7 @@ header { background: #0a0e17; border-bottom: 2px solid #f6ad55; padding: 16px 24
 
 .container { max-width: 1600px; margin: 0 auto; padding: 24px; }
 
-.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: nowrap; overflow-x: auto; }
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: nowrap; overflow-x: auto; position: sticky; top: 60px; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
 .sb-item { display: flex; flex-direction: column; }
 .sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 6px; }
 .sb-value { font-size: 22px; font-weight: 700; color: #e2e8f0; }

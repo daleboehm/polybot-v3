@@ -14,7 +14,7 @@ a.back:hover { background: #1a1f2e; color: #e2e8f0; }
 .badge-live { background: #166534; color: #86efac; }
 .badge-paper { background: #2563eb; color: #93c5fd; }
 .container { max-width: 1600px; margin: 0 auto; padding: 24px; }
-.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; position: sticky; top: 60px; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
 .sb-item { display: flex; flex-direction: column; }
 .sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 4px; }
 .sb-value { font-size: 22px; font-weight: 700; }
