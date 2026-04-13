@@ -50,6 +50,92 @@ export function markMarketClosed(conditionId: string): void {
   db.prepare("UPDATE markets SET closed = 1, active = 0, last_updated = datetime('now') WHERE condition_id = ?").run(conditionId);
 }
 
+// 2026-04-10: targeted metadata update used by the long-tail backfill job.
+// upsertMarket()'s ON CONFLICT intentionally leaves end_date alone (it trusts the
+// sampling poller's view), so long-tail positions outside the sampling horizon
+// never get their end_date refreshed by the normal poll cycle. This function
+// bypasses that by writing fields surgically — only the ones the caller provides.
+export function updateMarketMetadata(
+  conditionId: string,
+  fields: {
+    end_date?: string;
+    question?: string;
+    market_slug?: string;
+    active?: number;
+    closed?: number;
+    uma_resolution_status?: string;
+  },
+): void {
+  const db = getDatabase();
+  const sets: string[] = [];
+  const values: Array<string | number> = [];
+  if (fields.end_date !== undefined && fields.end_date !== '') {
+    sets.push('end_date = ?');
+    values.push(fields.end_date);
+  }
+  if (fields.question !== undefined && fields.question !== '') {
+    sets.push('question = ?');
+    values.push(fields.question);
+  }
+  if (fields.market_slug !== undefined && fields.market_slug !== '') {
+    sets.push('market_slug = ?');
+    values.push(fields.market_slug);
+  }
+  if (fields.active !== undefined) {
+    sets.push('active = ?');
+    values.push(fields.active);
+  }
+  if (fields.closed !== undefined) {
+    sets.push('closed = ?');
+    values.push(fields.closed);
+  }
+  if (fields.uma_resolution_status !== undefined) {
+    sets.push('uma_resolution_status = ?');
+    values.push(fields.uma_resolution_status);
+  }
+  if (sets.length === 0) return;
+  sets.push("last_updated = datetime('now')");
+  values.push(conditionId);
+  db.prepare(`UPDATE markets SET ${sets.join(', ')} WHERE condition_id = ?`).run(...values);
+}
+
+// 2026-04-10: minimal insert used by the long-tail backfill when a position
+// references a condition_id that has no row in `markets` at all (because the
+// sampling poller never returned it). We only know what Gamma tells us — enough
+// to satisfy the NOT NULL constraints and let the dashboard compute overdue state.
+export function insertMinimalMarket(fields: {
+  condition_id: string;
+  question: string;
+  market_slug: string;
+  end_date: string;
+  active: number;
+  closed: number;
+  neg_risk: number;
+  neg_risk_market_id: string | null;
+  token_yes_id: string;
+  token_no_id: string;
+}): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT OR IGNORE INTO markets (
+      condition_id, question, market_slug, end_date,
+      active, closed, neg_risk, neg_risk_market_id,
+      token_yes_id, token_no_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    fields.condition_id,
+    fields.question,
+    fields.market_slug,
+    fields.end_date,
+    fields.active,
+    fields.closed,
+    fields.neg_risk,
+    fields.neg_risk_market_id,
+    fields.token_yes_id,
+    fields.token_no_id,
+  );
+}
+
 export function getMarketCount(): { active: number; closed: number; total: number } {
   const db = getDatabase();
   const row = db.prepare(`

@@ -13,6 +13,7 @@ import type { EntityManager } from '../entity/entity-manager.js';
 import type { StrategyRegistry } from '../strategy/strategy-registry.js';
 import { eventBus } from '../core/event-bus.js';
 import { wilsonLowerBound, wilsonUpperBound } from './wilson.js';
+import { computeAdvisorV2Decision, type AdvisorV2Decision } from './advisor-v2-metrics.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('strategy-advisor');
@@ -27,6 +28,33 @@ const MIN_PNL_ENABLE = 5.0;
 const MIN_N_DISABLE = 50;
 const MAX_WILSON_UB_DISABLE = 0.50;
 const MAX_PNL_DISABLE = -5.0;
+
+// Phase B (2026-04-11): advisor v2 dual-decision shadow mode.
+//
+// When process.env.ADVISOR_V2_ENABLED === 'true', the advisor ALSO runs
+// the DSR + PSR + MinTRL + Brier metrics pipeline (computeAdvisorV2Decision)
+// on each pair and logs the result SIDE-BY-SIDE with the Wilson LB
+// decision. Behavior is UNCHANGED — v2 output is shadow-logged only.
+// This is the 7-day A/B window: we need to see how often DSR/PSR would
+// disagree with Wilson LB before we let either one drive an auto
+// enable/disable.
+//
+// Flag defaults OFF so the extra DB read (returns-series per pair) only
+// happens when you explicitly opt in. To enable in R&D only:
+//   systemctl edit polybot-v3-rd.service
+//     Environment=ADVISOR_V2_ENABLED=true
+//   systemctl restart polybot-v3-rd
+//
+// There is intentionally NO code path where v2 overrides Wilson. The
+// point of this phase is measurement, not action. After the 7-day
+// window, a follow-up PR will promote v2 to a voting role or replace
+// Wilson outright.
+const ADVISOR_V2_ENABLED = process.env.ADVISOR_V2_ENABLED === 'true';
+
+function roundMetric(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 10000) / 10000;
+}
 
 interface RdStrategyRow {
   strategy_id: string;
@@ -114,6 +142,12 @@ export class StrategyAdvisor {
       };
     }
 
+    // 2026-04-11 Phase 2.3: recent (last 14 days) Wilson LB for regime
+    // decay detection. Read once, alongside the all-time data; used in
+    // the disable branch below to catch strategies that are failing NOW
+    // even though their all-time stats still look OK.
+    const recentLBs = this.readRecentRdPerformance(14, 10);
+
     // Get all registered (strategy_id, sub_strategy_id) pairs from the registry
     const allPairs = this.strategyRegistry.getAllSubStrategyKeys();
     const decisions: AdvisorDecision[] = [];
@@ -181,6 +215,14 @@ export class StrategyAdvisor {
         // win rate is below 0.50 (Wilson UB < 0.50) AND P&L < -$5 to prevent
         // killing a merely-unlucky strategy.
         const wilsonUB = wilsonUpperBound(rd.wins, rd.total_resolutions);
+
+        // 2026-04-11 Phase 2.3: regime decay check. If the last-14-days
+        // Wilson LB is < 0.40 AND we have n ≥ 10 in the recent window,
+        // disable the strategy even if all-time Wilson UB hasn't tripped.
+        // This catches recent failures that the all-time average masks.
+        const recentLB = recentLBs.get(pairKey);
+        const recentRegimeDecay = recentLB !== undefined && recentLB !== null && recentLB < 0.40;
+
         if (
           rd.total_resolutions >= MIN_N_DISABLE &&
           wilsonUB < MAX_WILSON_UB_DISABLE &&
@@ -189,8 +231,15 @@ export class StrategyAdvisor {
           action = 'disable';
           reason = `R&D underperforming: Wilson UB ${wilsonUB.toFixed(3)} < ${MAX_WILSON_UB_DISABLE}, $${rd.total_pnl.toFixed(2)} P&L over ${rd.total_resolutions} resolutions`;
           enabledKeys.delete(pairKey);
+        } else if (recentRegimeDecay) {
+          action = 'disable';
+          reason = `Regime decay: last-14d Wilson LB ${recentLB!.toFixed(3)} < 0.40 (all-time still OK, recent trend negative)`;
+          enabledKeys.delete(pairKey);
         } else {
           reason = `Active — R&D: ${rd.total_resolutions > 0 ? rd.win_rate.toFixed(1) + '% raw WR, $' + rd.total_pnl.toFixed(2) + ' P&L' : 'collecting data'}`;
+          if (recentLB !== undefined && recentLB !== null) {
+            reason += ` (recent 14d LB: ${recentLB.toFixed(3)})`;
+          }
         }
       }
 
@@ -210,6 +259,82 @@ export class StrategyAdvisor {
             }
           : null,
       });
+
+      // Phase B (2026-04-11): advisor v2 dual-decision shadow mode.
+      //
+      // If ADVISOR_V2_ENABLED=true, compute the DSR/PSR/MinTRL/Brier
+      // decision on the same pair and log it alongside the Wilson LB
+      // decision above. This is PURELY observational — we are not
+      // acting on v2 decisions yet. The point is to accumulate a log
+      // of "Wilson said X, DSR/PSR said Y, they agreed/disagreed" so
+      // that after a 7-day window we have data to decide whether to
+      // promote v2 to a voting role.
+      //
+      // Errors in this path MUST NOT interfere with the main Wilson-LB
+      // decision flow. Try/catch swallows everything.
+      if (ADVISOR_V2_ENABLED) {
+        let v2Decision: AdvisorV2Decision | null = null;
+        try {
+          v2Decision = computeAdvisorV2Decision(
+            this.config.rd_database_path,
+            pair.strategy_id,
+            pair.sub_strategy_id ?? '',
+            enabledKeys.size,
+          );
+        } catch (err) {
+          log.debug(
+            {
+              err: err instanceof Error ? err.message : String(err),
+              strategy: pair.strategy_id,
+              sub: pair.sub_strategy_id,
+            },
+            'Advisor v2 shadow metric failed',
+          );
+        }
+
+        if (v2Decision) {
+          // Three-way classification so the A/B window's disagreement
+          // rate isn't inflated by "v2 has no opinion yet":
+          //   - "insufficient_data": v2 lacks n, not actually disagreeing
+          //   - "agrees": both methods reached the same action
+          //   - "disagrees": both methods have an opinion and they differ
+          let classification: 'agrees' | 'disagrees' | 'insufficient_data';
+          let headline: string;
+          if (v2Decision.action === 'insufficient_data') {
+            classification = 'insufficient_data';
+            headline = 'Advisor v2 shadow — INSUFFICIENT DATA';
+          } else if (v2Decision.action === action) {
+            classification = 'agrees';
+            headline = 'Advisor v2 shadow — AGREES with Wilson';
+          } else {
+            classification = 'disagrees';
+            headline = 'Advisor v2 shadow — DISAGREES with Wilson';
+          }
+          log.info(
+            {
+              strategy: pair.strategy_id,
+              sub: pair.sub_strategy_id,
+              wilson_action: action,
+              v2_action: v2Decision.action,
+              classification,
+              v2_reason: v2Decision.reason,
+              v2_n: v2Decision.n,
+              v2_sharpe: roundMetric(v2Decision.sharpe),
+              v2_psr: roundMetric(v2Decision.psr),
+              v2_dsr: roundMetric(v2Decision.dsr.dsr),
+              v2_min_trl: Number.isFinite(v2Decision.min_track_record_length)
+                ? Math.ceil(v2Decision.min_track_record_length)
+                : null,
+              v2_skew: roundMetric(v2Decision.dsr.skew),
+              v2_kurtosis: roundMetric(v2Decision.dsr.kurtosis),
+              v2_brier: v2Decision.brier_score !== null ? roundMetric(v2Decision.brier_score) : null,
+              v2_brier_reliability: v2Decision.brier_reliability !== null ? roundMetric(v2Decision.brier_reliability) : null,
+              v2_brier_drift: v2Decision.brier_drift_warning,
+            },
+            headline,
+          );
+        }
+      }
     }
 
     // Rebuild EntityStrategyConfig from enabledKeys
@@ -293,6 +418,58 @@ export class StrategyAdvisor {
       }
       log.debug({ rows: map.size, path: this.config.rd_database_path }, 'R&D performance data loaded');
       return map;
+    } finally {
+      db.close();
+    }
+  }
+
+  /**
+   * 2026-04-11 Phase 2.3: recency-weighted performance.
+   *
+   * Reads the last N days of resolutions per (strategy_id, sub_strategy_id)
+   * and returns a recent Wilson LB. Used to detect regime decay — when a
+   * strategy's all-time Wilson LB is still good but its last-14-days LB
+   * has collapsed, we demote it even though the advisor's all-time gate
+   * wouldn't catch it.
+   *
+   * Returns a Map keyed by the same composite key as readRdPerformance(),
+   * with value = recent Wilson lower bound (0-1) or null if insufficient n.
+   */
+  private readRecentRdPerformance(daysBack = 14, minN = 10): Map<string, number | null> {
+    const db = new Database(this.config.rd_database_path, { readonly: true, fileMustExist: true });
+    try {
+      const rows = db.prepare(`
+        SELECT
+          strategy_id,
+          COALESCE(sub_strategy_id, '') AS sub_strategy_id,
+          COUNT(*) AS n,
+          SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
+        FROM resolutions
+        WHERE resolved_at >= datetime('now', ?)
+          AND strategy_id IS NOT NULL
+        GROUP BY strategy_id, COALESCE(sub_strategy_id, '')
+      `).all(`-${daysBack} days`) as Array<{
+        strategy_id: string;
+        sub_strategy_id: string;
+        n: number;
+        wins: number;
+      }>;
+
+      const map = new Map<string, number | null>();
+      for (const row of rows) {
+        const key = this.key(row.strategy_id, row.sub_strategy_id);
+        if (row.n < minN) {
+          map.set(key, null);
+          continue;
+        }
+        const lb = wilsonLowerBound(row.wins, row.n);
+        map.set(key, lb);
+      }
+      log.debug({ rows: map.size, days: daysBack }, 'Recent R&D performance loaded');
+      return map;
+    } catch (err) {
+      log.warn({ err }, 'Failed to read recent R&D performance — skipping regime check');
+      return new Map();
     } finally {
       db.close();
     }

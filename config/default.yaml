@@ -7,16 +7,37 @@ engine:
   log_level: info
 
 risk:
-  max_position_pct: 0.10          # 10% of trading balance
-  max_position_usd: 20.00
-  fractional_kelly: 0.25
-  daily_loss_lockout_usd: 20.00
-  stop_loss_pct: 0.20             # -20%
-  hard_stop_usd: 5.00
-  profit_target_pct: 0.40         # +40%
-  reserve_ratio: 0.60
-  trading_ratio: 0.40
-  min_edge_threshold: 0.02        # 2% minimum edge
+  # ═══════════════════════════════════════════════════════════════════
+  # SPRINT MODE (2026-04-11, Dale's directive):
+  # Bankroll is $257, debt-pressured, running a sprint to flush the
+  # account so it can fund other entities for debt repayment. Marathon-
+  # era risk caps (envelope, cluster) are DISABLED here — they were
+  # preventing the engine from compounding its best strategies. The
+  # NO-LOSE mantra (hold to resolution, never force-exit) is still in
+  # effect, so "over-concentration" has no real downside in this phase.
+  #
+  # Re-enable these when bankroll > ~$5K and you want drawdown
+  # discipline more than compounding speed:
+  #   max_strategy_envelope_pct: 0.25
+  #   max_cluster_pct: 0.15
+  # ═══════════════════════════════════════════════════════════════════
+  max_position_pct: 0.25          # 25% of equity per position (was 10% marathon)
+  max_position_usd: 40.00         # absolute per-position cap (was 20 marathon)
+  fractional_kelly: 0.50          # half-Kelly for faster compounding (was 0.25)
+  daily_loss_lockout_usd: 20.00   # still active — single-day catastrophic floor
+  stop_loss_pct: 0.20             # still configured; NO-LOSE policy never stops
+  hard_stop_usd: 5.00             # per-position catastrophic floor
+  profit_target_pct: 0.40
+  # Sprint mode: no per-strategy and no per-cluster caps
+  max_strategy_envelope_pct: 0.0  # DISABLED for sprint
+  max_cluster_pct: 0.0            # DISABLED for sprint
+  # Trailing profit lock still active — captures more on runners
+  trailing_activation_pct: 0.20
+  trailing_retention_pct: 0.70
+  # 2026-04-10: reserve_ratio / trading_ratio / max_positions removed from schema.
+  # Dale's directive: "only limit is cash, no reserve." Trading balance == cash.
+  # When reserves come back, it'll be via the central-node sweep pattern.
+  min_edge_threshold: 0.015       # 1.5% minimum edge (was 0.02 marathon)
   min_hold_hours: 6
   # Dale 2026-04-10: prod must NOT buy anything that resolves past 48 hours.
   # "I need to keep the capital moving." Enforced by strategy-context.ts
@@ -59,3 +80,63 @@ dashboard:
 
 database:
   path: ./data/polybot.db
+
+# R&D → Prod strategy sync. The advisor reads R&D's rd.db read-only on a timer
+# and auto-enables/disables sub-strategies on prod based on Wilson LB gating
+# over R&D's resolved positions. Before 2026-04-11 this section was missing
+# from the yaml which meant the schema default `enabled: false` silently
+# disabled the feedback loop entirely — prod had no way to learn from R&D.
+#
+# Check interval set to 5 min to match the scan cycle. This way R&D's most
+# recent resolutions propagate to prod before prod's next scan fires.
+advisor:
+  enabled: true
+  rd_database_path: /opt/polybot-v3-rd/data/rd.db
+  check_interval_ms: 300000         # 5 minutes (was 30 min default)
+  target_entity_slug: polybot
+  # Never auto-disable these even if Wilson gate fires — they have real data
+  # feeds (Open-Meteo, Binance) and low resolution counts from the R&D sample.
+  #
+  # 2026-04-11 Option B addition: longshot.bucketed_fade is protected because
+  # R&D shows n=59, 76.3% WR, -$15.49 pnl. Wilson UB=0.853 (Wilson wouldn't
+  # disable it anyway), but the -$15 pnl is a clear "high WR, Sharpe-negative"
+  # pattern that DSR/PSR would catch and Wilson misses. The protection is
+  # preventive in case advisor logic tightens later. Bucketed_fade landed 7
+  # of prod's last 30-min fills — protecting it keeps order flow stable.
+  # 48-HOUR REVIEW: after prod's own v_strategy_performance has n>=30 on
+  # bucketed_fade with real reconciler data, decide whether to keep the
+  # protection or let the advisor manage it. See docs/todo.md for the
+  # review trigger.
+  protected_strategies:
+    - weather_forecast
+    - crypto_price
+    - longshot.bucketed_fade
+  thresholds:
+    min_resolutions_to_enable: 10
+    min_win_rate_to_enable: 50
+    min_pnl_to_enable: 0
+    min_resolutions_to_disable: 20
+    max_win_rate_to_disable: 30
+
+# Attention Router — scouts write high-priority markets to market_priorities
+# and this scanner fires strategies on them every 30 seconds out of the
+# normal scan cycle. Harmless to leave enabled on engines where no scouts
+# are running (finds an empty table, does nothing).
+priority_scanner:
+  enabled: true
+  interval_ms: 30000              # 30 seconds
+  max_priorities_per_run: 25
+  min_scan_gap_ms: 60000          # don't re-scan the same priority row more than 1x/min
+  gc_every_n_runs: 60             # GC expired priority + intel rows every ~30 min
+
+# Scout fleet — in-process market watchers. Volume spike, price jump,
+# new listing, and LLM news scouts run on a 60-second tick inside the
+# engine process, watching the market cache for patterns and writing
+# priority/intel rows. llm-news-scout is a no-op without ANTHROPIC_API_KEY.
+# Add scout ids to `disabled_scouts` to kill specific scouts without
+# touching code.
+scouts:
+  enabled: true
+  interval_ms: 60000              # 60 seconds between ticks
+  # 2026-04-12: LeaderboardPollerScout ENABLED. All scouts active.
+  disabled_scouts: []

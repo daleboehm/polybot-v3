@@ -294,6 +294,160 @@ CREATE INDEX IF NOT EXISTS idx_audit_event ON audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_slug);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 
+-- ─── MARKET PRIORITIES (Attention Router — Phase 2, 2026-04-11) ──────
+-- Scouts write rows here to tell the engine "scan this market now, don't
+-- wait for the next 5-minute scan cycle." The PriorityScanner runs every
+-- 30 seconds, reads active (expires_at > now) priorities, and fires
+-- strategies on just those markets out of the normal cycle. Signals
+-- flow through the normal risk + execution pipeline.
+--
+-- Priority: 1 (lowest) to 10 (highest). Scout's confidence + urgency.
+-- Reason: short text, scout writes why (e.g. "volume spike 8x baseline").
+-- Created_by: scout_id of the scout that wrote the row. Used for dashboards
+-- and to debug which scouts are producing useful priorities.
+-- Expires_at: unix ms. Scouts set short windows (5-30 min) so stale
+-- priorities clean themselves up.
+-- Scanned_count: how many times the PriorityScanner has evaluated this
+-- row since insert. Used to rate-limit repeat scans of the same market.
+CREATE TABLE IF NOT EXISTS market_priorities (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id    TEXT    NOT NULL,
+    priority        INTEGER NOT NULL CHECK(priority BETWEEN 1 AND 10),
+    reason          TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    scanned_count   INTEGER NOT NULL DEFAULT 0,
+    last_scanned_at INTEGER,
+    FOREIGN KEY (condition_id) REFERENCES markets(condition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_active ON market_priorities(expires_at) WHERE expires_at > 0;
+CREATE INDEX IF NOT EXISTS idx_mp_condition ON market_priorities(condition_id);
+CREATE INDEX IF NOT EXISTS idx_mp_scout ON market_priorities(created_by);
+
+-- ─── SCOUT INTEL (Scout Overlay — Phase 3, 2026-04-11) ──────────────
+-- Scouts write *qualitative* intel here: "market X, side NO, conviction
+-- 0.7, reason: CDC just announced". Strategies read this during signal
+-- build via scout-overlay.ts and apply a size multiplier:
+--   agree + high conviction → 1.25x
+--   disagree + high conviction → 0.5x (or skip)
+--   no intel → 1.0x
+-- Intel cannot CREATE signals — it only weights existing ones. The
+-- strategy math + calibration is always primary.
+--
+-- Side: 'YES' | 'NO' — which side the scout thinks should resolve.
+-- Conviction: 0-1, how confident the scout is. 0.5 = neutral, 1.0 = high.
+-- Reason: free text, scout explains in plain language.
+-- Expires_at: default 24h from created_at. Scouts can set shorter for
+-- time-sensitive news, longer for structural observations.
+CREATE TABLE IF NOT EXISTS scout_intel (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    condition_id    TEXT    NOT NULL,
+    side            TEXT    NOT NULL CHECK(side IN ('YES', 'NO')),
+    conviction      REAL    NOT NULL CHECK(conviction BETWEEN 0 AND 1),
+    reason          TEXT    NOT NULL,
+    created_by      TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    used_count      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (condition_id) REFERENCES markets(condition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_si_active ON scout_intel(expires_at);
+CREATE INDEX IF NOT EXISTS idx_si_condition ON scout_intel(condition_id);
+CREATE INDEX IF NOT EXISTS idx_si_scout ON scout_intel(created_by);
+
+-- ─── SMART MONEY CANDIDATES (Whale Tracking — Phase C1a, 2026-04-11) ─
+-- The LeaderboardPollerScout hits data-api.polymarket.com/leaderboards
+-- every 10 minutes and upserts rows here keyed by proxy_wallet. Each row
+-- tracks the wallet's most recent weekly profit, all-time realized PnL,
+-- total volume, and pseudonym. A nightly filter job (CLI command
+-- 'polybot smart-money-filter') walks every row, queries the Data API
+-- for each wallet's full resolved-position history, applies the Bravado
+-- Trade 4-threshold filter (>=200 settled markets, >=65% WR, varied
+-- sizing, cross-category) and promotes survivors to whitelisted_whales.
+--
+-- status values:
+--   'candidate' — appeared on leaderboard, not yet evaluated by filter
+--   'passed'    — filter job promoted it (also appears in whitelisted_whales)
+--   'failed'    — filter job evaluated and rejected
+--   'expired'   — hasn't been seen on the leaderboard in >7 days
+CREATE TABLE IF NOT EXISTS smart_money_candidates (
+    proxy_wallet          TEXT    PRIMARY KEY,
+    pseudonym             TEXT,
+    weekly_profit_usd     REAL    NOT NULL DEFAULT 0,
+    all_time_pnl_usd      REAL    NOT NULL DEFAULT 0,
+    total_volume_usd      REAL    NOT NULL DEFAULT 0,
+    first_seen_at         INTEGER NOT NULL,
+    last_seen_at          INTEGER NOT NULL,
+    last_filter_run_at    INTEGER,
+    settled_markets       INTEGER NOT NULL DEFAULT 0,
+    win_rate              REAL    NOT NULL DEFAULT 0,
+    category_count        INTEGER NOT NULL DEFAULT 0,
+    uniform_sizing        INTEGER NOT NULL DEFAULT 0,
+    status                TEXT    NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate', 'passed', 'failed', 'expired'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_smc_status ON smart_money_candidates(status);
+CREATE INDEX IF NOT EXISTS idx_smc_last_seen ON smart_money_candidates(last_seen_at);
+
+-- ─── WHITELISTED WHALES (Whale Tracking — Phase C1a, 2026-04-11) ─────
+-- Subset of smart_money_candidates that passed the filter AND have been
+-- approved (either by the filter job automatically or by the operator
+-- manually via CLI). The whale-copy strategy ONLY copies trades from
+-- wallets in this table. Seeding happens via either:
+--   1. polybot smart-money-filter (nightly job, auto-promotes filter passers)
+--   2. polybot whale-seed --wallet 0x... (manual seed)
+--
+-- Manual seeds are how we bootstrap before the filter has enough data
+-- (e.g. seeding Fredi9999 from the 2024 election research).
+CREATE TABLE IF NOT EXISTS whitelisted_whales (
+    proxy_wallet     TEXT    PRIMARY KEY,
+    pseudonym        TEXT,
+    promoted_at      INTEGER NOT NULL,
+    promoted_by      TEXT    NOT NULL,  -- 'smart-money-filter' or 'manual'
+    reason           TEXT,
+    active           INTEGER NOT NULL DEFAULT 1,
+    copy_multiplier  REAL    NOT NULL DEFAULT 1.0 CHECK(copy_multiplier BETWEEN 0 AND 2.0),
+    last_trade_seen  INTEGER,
+    trades_copied    INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (proxy_wallet) REFERENCES smart_money_candidates(proxy_wallet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ww_active ON whitelisted_whales(active) WHERE active = 1;
+
+-- ─── WHALE TRADES (Whale Tracking — Phase C1a, 2026-04-11) ───────────
+-- Log of every whale trade the event tracker observes. Used for:
+--   (a) audit trail — we saw trade X at time Y, took action Z
+--   (b) dedup — don't copy the same trade twice
+--   (c) latency measurement — whale_ts vs our_action_ts
+--   (d) attribution — which whale's trades we copied, which we skipped
+CREATE TABLE IF NOT EXISTS whale_trades (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    proxy_wallet          TEXT    NOT NULL,
+    condition_id          TEXT    NOT NULL,
+    token_id              TEXT    NOT NULL,
+    side                  TEXT    NOT NULL CHECK(side IN ('BUY', 'SELL')),
+    outcome               TEXT    NOT NULL CHECK(outcome IN ('YES', 'NO')),
+    size                  REAL    NOT NULL,
+    price                 REAL    NOT NULL,
+    usdc_size             REAL    NOT NULL,
+    block_number          INTEGER NOT NULL,
+    tx_hash               TEXT    NOT NULL,
+    observed_at           INTEGER NOT NULL,
+    -- action we took in response
+    action                TEXT    NOT NULL CHECK(action IN ('copied', 'skipped_latency', 'skipped_fair_value', 'skipped_dedup', 'skipped_illiquid', 'skipped_not_whitelisted', 'skipped_other')),
+    action_reason         TEXT,
+    our_signal_id         TEXT,
+    FOREIGN KEY (proxy_wallet) REFERENCES smart_money_candidates(proxy_wallet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wt_wallet ON whale_trades(proxy_wallet);
+CREATE INDEX IF NOT EXISTS idx_wt_condition ON whale_trades(condition_id);
+CREATE INDEX IF NOT EXISTS idx_wt_observed ON whale_trades(observed_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wt_txhash ON whale_trades(tx_hash, token_id);
+
 -- ─── VIEWS ──────────────────────────────────────────────────
 
 CREATE VIEW IF NOT EXISTS v_entity_pnl AS
@@ -319,7 +473,12 @@ LEFT JOIN (
     SELECT entity_slug,
            SUM(realized_pnl) AS total_realized_pnl,
            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS total_wins,
-           SUM(CASE WHEN realized_pnl <= 0 THEN 1 ELSE 0 END) AS total_losses
+           -- 2026-04-10: changed <= 0 to < 0 (strict). A realized_pnl of exactly 0
+           -- is a push, not a loss. This also excludes the accounting-neutral
+           -- placeholder rows written by the reconciler for close_absent cases
+           -- where the market is not yet resolved — those get payout=cost_basis,
+           -- realized_pnl=0 so they stay in the history table without polluting W/L.
+           SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS total_losses
     FROM resolutions
     GROUP BY entity_slug
 ) r ON e.slug = r.entity_slug
@@ -371,8 +530,12 @@ SELECT
     COALESCE(r.total_resolutions, 0) AS total_resolutions,
     COALESCE(r.wins, 0) AS wins,
     COALESCE(r.losses, 0) AS losses,
-    CASE WHEN COALESCE(r.total_resolutions, 0) > 0
-         THEN ROUND(100.0 * r.wins / r.total_resolutions, 1)
+    -- 2026-04-10: divide wins by (wins + losses), NOT by total_resolutions.
+    -- total_resolutions includes pushes (realized_pnl = 0, accounting-neutral
+    -- placeholder rows from the reconciler's close_absent fallback). Including
+    -- them in the denominator would artificially suppress win rate.
+    CASE WHEN COALESCE(r.wins, 0) + COALESCE(r.losses, 0) > 0
+         THEN ROUND(100.0 * r.wins / (r.wins + r.losses), 1)
          ELSE 0.0 END AS win_rate,
     COALESCE(r.total_pnl, 0) AS total_pnl,
     COALESCE(r.avg_pnl_per_trade, 0) AS avg_pnl_per_trade,
@@ -393,7 +556,8 @@ LEFT JOIN (
     SELECT strategy_id, COALESCE(sub_strategy_id, '') AS sub_strategy_id, entity_slug,
            COUNT(*) AS total_resolutions,
            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
-           SUM(CASE WHEN realized_pnl <= 0 THEN 1 ELSE 0 END) AS losses,
+           -- 2026-04-10: strict < 0 (see v_entity_pnl above for rationale).
+           SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS losses,
            SUM(realized_pnl) AS total_pnl,
            AVG(realized_pnl) AS avg_pnl_per_trade,
            MAX(realized_pnl) AS best_trade,
@@ -434,17 +598,80 @@ export function applySchema(db: Database.Database): void {
     }
   }
 
-  // Recreate v_strategy_performance view (it may reference old schema)
+  // 2026-04-11: add uma_resolution_status column to markets table for the
+  // UMA dispute watcher (Phase 1.2). Non-empty value (anything other than "")
+  // means UMA oracle has taken some action on the market — "disputed",
+  // "proposed", "resolved", etc. The watcher polls Gamma hourly and writes
+  // the latest value; the dashboard reads it to show triage state and the
+  // alerter fires on disputes. Nullable because legacy rows don't have it.
+  try {
+    const marketCols = db.prepare(`PRAGMA table_info(markets)`).all() as Array<{ name: string }>;
+    if (!marketCols.some(c => c.name === 'uma_resolution_status')) {
+      db.exec(`ALTER TABLE markets ADD COLUMN uma_resolution_status TEXT`);
+      log.info('Added uma_resolution_status column to markets');
+    }
+  } catch (err) {
+    log.warn({ err }, 'uma_resolution_status migration failed');
+  }
+
+  // 2026-04-11 Phase 2.5: add peak_pnl_pct column to positions for the
+  // trailing profit lock. Tracks the highest unrealized PnL % the position
+  // has ever reached, so we can trigger a profit-target exit when current
+  // PnL drops below peak * trailing_retention_pct. Preserves the NO-LOSE
+  // mantra (never exits at a loss) while capturing more on runners.
+  try {
+    const posCols = db.prepare(`PRAGMA table_info(positions)`).all() as Array<{ name: string }>;
+    if (!posCols.some(c => c.name === 'peak_pnl_pct')) {
+      db.exec(`ALTER TABLE positions ADD COLUMN peak_pnl_pct REAL DEFAULT 0`);
+      log.info('Added peak_pnl_pct column to positions');
+    }
+  } catch (err) {
+    log.warn({ err }, 'peak_pnl_pct migration failed');
+  }
+
+  // 2026-04-11 Phase 2 (Attention Router) + Phase 3 (Scout Overlay):
+  // ensure market_priorities and scout_intel tables exist on DBs that were
+  // created before these tables were in the DDL. The CREATE TABLE IF NOT
+  // EXISTS statements above run on every startup and are idempotent, but
+  // we explicitly verify the tables exist here to surface any migration
+  // failure in the logs rather than silently continuing.
+  try {
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('market_priorities','scout_intel','smart_money_candidates','whitelisted_whales','whale_trades')`).all() as Array<{ name: string }>;
+    const names = new Set(tables.map(t => t.name));
+    const required = ['market_priorities', 'scout_intel', 'smart_money_candidates', 'whitelisted_whales', 'whale_trades'];
+    for (const r of required) {
+      if (!names.has(r)) {
+        log.warn({ table: r }, 'Required table missing after DDL apply — this should not happen');
+      }
+    }
+  } catch (err) {
+    log.warn({ err }, 'priority/intel/whale table verification failed');
+  }
+
+  // Force-recreate views on every startup so edits to the DDL take effect.
+  // CREATE VIEW IF NOT EXISTS is a no-op when the view already exists, so any
+  // change to the SQL below would silently not apply without this drop step.
+  // 2026-04-10: added v_entity_pnl to the recreate set (W/L and win-rate fix).
   try {
     db.exec('DROP VIEW IF EXISTS v_strategy_performance');
-    // Re-execute just the view portion of DDL
-    const viewDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_performance[\s\S]*?ORDER BY COALESCE\(s\.total_trades, 0\) DESC;/);
-    if (viewDdl) {
-      db.exec(viewDdl[0]);
+    const stratDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_performance[\s\S]*?ORDER BY COALESCE\(s\.total_trades, 0\) DESC;/);
+    if (stratDdl) {
+      db.exec(stratDdl[0]);
       log.info('v_strategy_performance view recreated');
     }
   } catch (err) {
-    log.warn({ err }, 'View recreation failed');
+    log.warn({ err }, 'v_strategy_performance recreation failed');
+  }
+
+  try {
+    db.exec('DROP VIEW IF EXISTS v_entity_pnl');
+    const entityDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_entity_pnl[\s\S]*?\) p ON e\.slug = p\.entity_slug;/);
+    if (entityDdl) {
+      db.exec(entityDdl[0]);
+      log.info('v_entity_pnl view recreated');
+    }
+  } catch (err) {
+    log.warn({ err }, 'v_entity_pnl recreation failed');
   }
 
   // Record schema version

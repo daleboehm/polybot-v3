@@ -8,6 +8,7 @@ import { insertOrder, updateOrderStatus } from '../storage/repositories/order-re
 import { insertTrade } from '../storage/repositories/trade-repo.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
+import { getPrimaryRpc } from '../market/rpc-config.js';
 import { killSwitch } from '../core/kill-switch.js';
 import { nanoid } from 'nanoid';
 import { roundTo } from '../utils/math.js';
@@ -191,7 +192,7 @@ class ClobClientWrapper {
     const walletClient = createWalletClient({
       account,
       chain: polygon,
-      transport: http('https://polygon.drpc.org'),
+      transport: http(getPrimaryRpc()),
     });
 
     this.client = new mod.ClobClient(

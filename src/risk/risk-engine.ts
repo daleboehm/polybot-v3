@@ -1,10 +1,12 @@
 // Pre-trade and post-trade risk checks — gates every order
 
 import type { Signal, RiskCheck, RiskViolation, RiskLimits, EntityState, StrategyDecision, OrderRequest } from '../types/index.js';
+import type { MarketCache } from '../market/market-cache.js';
 import { calculatePositionSize } from './position-sizer.js';
 import { StrategyWeighter } from './strategy-weighter.js';
-import { getOpenPositionCount } from '../storage/repositories/position-repo.js';
 import { getOpenOrders } from '../storage/repositories/order-repo.js';
+import { getDeployedByStrategy, getOpenPositions } from '../storage/repositories/position-repo.js';
+import { checkClusterCap } from './portfolio-correlation.js';
 import { insertSignal } from '../storage/repositories/signal-repo.js';
 import { eventBus } from '../core/event-bus.js';
 import { createChildLogger } from '../core/logger.js';
@@ -14,11 +16,13 @@ const log = createChildLogger('risk-engine');
 
 export class RiskEngine {
   private strategyWeighter: StrategyWeighter | undefined;
+  private marketCache?: MarketCache;
 
-  constructor(private limits: RiskLimits, enableWeighting = false) {
+  constructor(private limits: RiskLimits, enableWeighting = false, marketCache?: MarketCache) {
     if (enableWeighting) {
       this.strategyWeighter = new StrategyWeighter();
     }
+    this.marketCache = marketCache;
   }
 
   evaluate(signal: Signal, entity: EntityState): StrategyDecision {
@@ -77,17 +81,11 @@ export class RiskEngine {
       });
     }
 
-    // Check: max open positions — exits bypass (exits REDUCE position count).
-    const openPositions = getOpenPositionCount(entity.config.slug);
-    if (!isExit && openPositions >= this.limits.max_positions) {
-      violations.push({
-        rule: 'max_positions',
-        message: `${openPositions} open positions (max ${this.limits.max_positions})`,
-        severity: 'block',
-        current_value: openPositions,
-        limit_value: this.limits.max_positions,
-      });
-    }
+    // 2026-04-10: max_positions count cap removed per Dale's directive —
+    // "the only limit should be cash." Sizing now self-bounds via Kelly +
+    // max_position_pct + max_position_usd, and the engine will refuse to open
+    // a position when trading_balance < signal's minimum size. That's the
+    // binding constraint we want, not an arbitrary count.
 
     // Check: max concurrent open orders (configurable via risk.max_open_orders)
     const openOrders = getOpenOrders(entity.config.slug);
@@ -99,6 +97,87 @@ export class RiskEngine {
         current_value: openOrders.length,
         limit_value: this.limits.max_open_orders,
       });
+    }
+
+    // 2026-04-11 Phase 1.5 + fix: per-strategy capital envelope.
+    //
+    // Denominator is EQUITY (cash + open_positions_value), not trading_balance.
+    // The first pass of this check used trading_balance (== cash after Dale's
+    // reserve removal) as the denominator, which collapsed the envelope cap
+    // to near-zero once cash was fully deployed: a strategy with $50 already
+    // in positions got checked against 25% of $12 current cash = $3 cap,
+    // rejecting every new entry even though the entity had $160 equity.
+    //
+    // Fix: compute equity as cash + sum(open_positions.cost_basis), then
+    // cap each strategy at envelope_pct of equity. This matches the
+    // intuition — "no strategy should tie up more than 25% of the TOTAL
+    // bankroll" — regardless of how much is currently sitting as cash vs
+    // as open positions.
+    //
+    // Lookup getOpenPositions once and reuse for both envelope + cluster
+    // checks below (same data).
+    let openPositionsCache: ReturnType<typeof getOpenPositions> | null = null;
+    const getOpenCached = () => {
+      if (openPositionsCache === null) {
+        openPositionsCache = getOpenPositions(entity.config.slug);
+      }
+      return openPositionsCache;
+    };
+    const computeEquity = (): number => {
+      const cash = entity.trading_balance || 0;
+      const deployed = getOpenCached().reduce((s, p) => s + (p.cost_basis || 0), 0);
+      return cash + deployed;
+    };
+
+    const envelopePct = this.limits.max_strategy_envelope_pct ?? 0.25;
+    if (!isExit && envelopePct > 0 && signal.strategy_id) {
+      const equity = computeEquity();
+      const envelopeCapUsd = equity * envelopePct;
+      if (envelopeCapUsd > 0) {
+        const deployedByStrategy = getDeployedByStrategy(entity.config.slug);
+        const currentDeployed = deployedByStrategy[signal.strategy_id] ?? 0;
+        const proposedIncrement = signal.recommended_size_usd ?? 0;
+        if (currentDeployed + proposedIncrement > envelopeCapUsd) {
+          violations.push({
+            rule: 'strategy_envelope',
+            message: `strategy ${signal.strategy_id} deployed $${currentDeployed.toFixed(2)} + proposed $${proposedIncrement.toFixed(2)} > envelope cap $${envelopeCapUsd.toFixed(2)} (${(envelopePct * 100).toFixed(0)}% of equity $${equity.toFixed(2)})`,
+            severity: 'block',
+            current_value: currentDeployed + proposedIncrement,
+            limit_value: envelopeCapUsd,
+          });
+        }
+      }
+    }
+
+    // 2026-04-11 Phase 2.2 + fix: correlated-cluster cap.
+    // Same denominator change as above — use equity, not trading_balance.
+    // Without the fix, every existing cluster (including __orphan with the
+    // 4 political positions) was over its cap as soon as cash was deployed,
+    // permanently blocking new entries into any cluster that already had
+    // any position.
+    const clusterPct = this.limits.max_cluster_pct ?? 0.15;
+    if (!isExit && clusterPct > 0) {
+      const openPositions = getOpenCached();
+      const marketMeta = this.marketCache?.get(signal.condition_id);
+      const marketQuestion = marketMeta?.question ?? '';
+      const equity = computeEquity();
+      const clusterCheck = checkClusterCap(
+        marketQuestion,
+        signal.condition_id,
+        signal.recommended_size_usd ?? 0,
+        equity,
+        clusterPct,
+        openPositions,
+      );
+      if (clusterCheck.breach) {
+        violations.push({
+          rule: 'cluster_cap',
+          message: `cluster ${clusterCheck.cluster_id} deployed $${clusterCheck.current_deployed.toFixed(2)} + proposed $${(signal.recommended_size_usd ?? 0).toFixed(2)} > cap $${clusterCheck.cap_usd.toFixed(2)} (${(clusterPct * 100).toFixed(0)}% of equity $${equity.toFixed(2)})`,
+          severity: 'block',
+          current_value: clusterCheck.proposed_total,
+          limit_value: clusterCheck.cap_usd,
+        });
+      }
     }
 
     // Calculate position size. Exits use the signal's recommended_size_usd directly
@@ -114,7 +193,7 @@ export class RiskEngine {
         strategy_weight: 1.0,
       };
     } else {
-      sizing = calculatePositionSize(signal, entity, this.limits, this.strategyWeighter ?? undefined);
+      sizing = calculatePositionSize(signal, entity, this.limits, this.strategyWeighter ?? undefined, this.marketCache);
     }
 
     if (sizing.size_usd <= 0) {
@@ -134,6 +213,9 @@ export class RiskEngine {
     // Build order request if approved
     let orderRequest: OrderRequest | undefined;
     if (approved) {
+      // Phase A2 (2026-04-11): thread the market's minimum_tick_size through
+      // to the order-builder so maker pricing uses correct precision.
+      const market = this.marketCache?.get(signal.condition_id);
       orderRequest = {
         entity_slug: signal.entity_slug,
         condition_id: signal.condition_id,
@@ -145,6 +227,7 @@ export class RiskEngine {
         strategy_id: signal.strategy_id,
         sub_strategy_id: signal.sub_strategy_id,
         signal_id: signal.signal_id,
+        minimum_tick_size: market?.minimum_tick_size,
       };
     }
 

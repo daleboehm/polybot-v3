@@ -9,6 +9,8 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
+import { calibratedSideProb } from '../../market/markov-calibration.js';
+import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -63,13 +65,22 @@ export class ConvergenceStrategy extends BaseStrategy {
         cp = m.no_price; cs = 'NO'; ct = m.token_no_id;
       }
 
-      // R2 PR#1: calibrate model_prob from resolved convergence positions in this
-      // bucket (2026-04-10 base-rate-calibrator). Fallback to the old heuristic
-      // when insufficient data, but log that the signal is using fallback so the
-      // advisor can de-rate it vs calibrated signals.
-      const calibratedProbFhp = baseRateCalibrator.getBaseRate(this.id, cp, 'filtered_high_prob');
-      const usingCalibrationFhp = calibratedProbFhp !== null;
-      const fhpModelProb = calibratedProbFhp ?? Math.min(0.99, cp + (1 - cp) * 0.3);
+      // Probability fallback chain (Phase 3, 2026-04-11):
+      //   1. own-data base-rate calibrator — Wilson LB from our own resolved
+      //      convergence.filtered_high_prob positions, bucketed by entry price.
+      //   2. Markov empirical grid — Becker 72.1M-trade industry calibration.
+      //      Critical for prod where own-data returns null almost every signal.
+      //   3. naive `cp + (1 - cp) * 0.3` — last resort if both sources fail.
+      const ownCalibrationFhp = baseRateCalibrator.getBaseRate(this.id, cp, 'filtered_high_prob');
+      const markovCalibrationFhp = calibratedSideProb(cp, cs);
+      const usingOwnFhp = ownCalibrationFhp !== null;
+      const usingMarkovFhp = !usingOwnFhp && Number.isFinite(markovCalibrationFhp);
+      const usingCalibrationFhp = usingOwnFhp || usingMarkovFhp;
+      const fhpModelProb = Math.min(
+        0.99,
+        ownCalibrationFhp ??
+          (Number.isFinite(markovCalibrationFhp) ? markovCalibrationFhp : cp + (1 - cp) * 0.3),
+      );
       const fhpEdge = usingCalibrationFhp ? (fhpModelProb - cp) : ((1 - cp) * 0.5);
 
       if (
@@ -80,6 +91,8 @@ export class ConvergenceStrategy extends BaseStrategy {
       ) {
         const key = `filtered_high_prob:${m.condition_id}`;
         if (!this.recent.has(key)) {
+          const overlay = applyScoutOverlay(m.condition_id, cs);
+          const sizedUsd = Math.max(1, 10 * overlay.multiplier);
           signals.push({
             signal_id: nanoid(),
             entity_slug: ctx.entity.config.slug,
@@ -93,13 +106,18 @@ export class ConvergenceStrategy extends BaseStrategy {
             edge: fhpEdge,
             model_prob: fhpModelProb,
             market_price: cp,
-            recommended_size_usd: 10,
+            recommended_size_usd: sizedUsd,
             metadata: {
               question: m.question,
               sub_strategy: 'filtered_high_prob',
               hours_to_resolve: hoursToResolve,
               liquidity: m.liquidity,
               using_calibration: usingCalibrationFhp,
+              using_own_calibration: usingOwnFhp,
+              using_markov_calibration: usingMarkovFhp,
+              scout_overlay_multiplier: overlay.multiplier,
+              scout_overlay_reason: overlay.reason,
+              scout_overlay_scout_id: overlay.scoutId,
             },
             created_at: new Date(),
           });
@@ -131,8 +149,25 @@ export class ConvergenceStrategy extends BaseStrategy {
         cp >= 0.93 && cp <= 0.99 &&
         hoursToResolve > 2 && hoursToResolve <= 30 * 24
       ) {
+        // Markov calibration anchored on Becker's empirical grid for the
+        // 93-99¢ zone. Grid values in this range: 0.93→~0.928, 0.95→0.9549,
+        // 0.97→0.9733, 0.99→0.9915. Slight systematic underpricing on deep
+        // favorites per the study's findings. We use the grid for model_prob
+        // and compute edge as grid - market_price.
+        const ownCalibrationLtg = baseRateCalibrator.getBaseRate(this.id, cp, 'long_term_grind');
+        const markovCalibrationLtg = calibratedSideProb(cp, cs);
+        const usingOwnLtg = ownCalibrationLtg !== null;
+        const usingMarkovLtg = !usingOwnLtg && Number.isFinite(markovCalibrationLtg);
+        const ltgModelProb = Math.min(
+          0.99,
+          ownCalibrationLtg ??
+            (Number.isFinite(markovCalibrationLtg) ? markovCalibrationLtg : cp + 0.005),
+        );
+        const ltgEdge = ltgModelProb - cp;
         const key = `long_term_grind:${m.condition_id}`;
         if (!this.recent.has(key)) {
+          const ltgOverlay = applyScoutOverlay(m.condition_id, cs);
+          const ltgSizedUsd = Math.max(1, 20 * ltgOverlay.multiplier);
           signals.push({
             signal_id: nanoid(),
             entity_slug: ctx.entity.config.slug,
@@ -143,15 +178,20 @@ export class ConvergenceStrategy extends BaseStrategy {
             side: 'BUY',
             outcome: cs,
             strength: cp,
-            edge: 1 - cp,
-            model_prob: Math.min(0.99, cp + 0.005),
+            edge: ltgEdge,
+            model_prob: ltgModelProb,
             market_price: cp,
-            recommended_size_usd: 20,
+            recommended_size_usd: ltgSizedUsd,
             metadata: {
               question: m.question,
               sub_strategy: 'long_term_grind',
               hours_to_resolve: hoursToResolve,
               profit: 1 - cp,
+              using_own_calibration: usingOwnLtg,
+              using_markov_calibration: usingMarkovLtg,
+              scout_overlay_multiplier: ltgOverlay.multiplier,
+              scout_overlay_reason: ltgOverlay.reason,
+              scout_overlay_scout_id: ltgOverlay.scoutId,
             },
             created_at: new Date(),
           });

@@ -1,0 +1,26 @@
+[Unit]
+Description=Polybot V3 Kalshi Arb Scanner (prod-only — read-only scan)
+After=network-online.target polybot-v3.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/polybot-v3
+ExecStart=/usr/bin/node /opt/polybot-v3/dist/cli/index.js kalshi-arb-scan
+EnvironmentFile=/opt/polybot-v3/.env
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+LimitNOFILE=65536
+MemoryMax=256M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polybot-v3-kalshi-arb
+
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

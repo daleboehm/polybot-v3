@@ -1,6 +1,15 @@
 # Polymarket V2 Trading Engine — Context
 
-> Last updated: 2026-04-10 (post-audit, post-redaction)
+> Last updated: 2026-04-11 (maker/taker + Markov calibration + research-capture pipeline session)
+
+## 2026-04-11 SESSION SUMMARY (for quick resume)
+
+- **Maker/taker hybrid shipped** — entries post as makers (1 tick better), exits remain takers. Expected capture: +1.12% / -1.12% = 2.24pp swing per trade vs prior all-taker pricing. Paper simulator enforces fill gating so R&D learns real fill-rate cost. Commit `db687ca`.
+- **Markov empirical calibration shipped** — `src/market/markov-calibration.ts` with Becker 72.1M-trade empirical YES-resolution grid. Longshot strategy consumes it as the second step in probability fallback (own data → Markov grid → naive). Base size multiplied by `longshotBiasMultiplier(price, side)` to shrink YES / grow NO in <20¢ longshot zone. Commits `031d734` + `3ab1825`.
+- **Research-capture pipeline shipped** — `scripts/skills/capture-research.sh` wrapper + `SKILL-template.md`. Good articles now flow: WebFetch → evaluate → scaffold via `capture-research.sh <name>` → fill sections → `install-skills.sh --execute --source research-captured` → risk-filtered auto-deploy. Retroactively captured Becker findings. Active skills: 1050.
+- **R&D dist drift was a non-issue** — `/opt/polybot-v3-rd/dist/` was orphaned artifacts from a prior layout; R&D's systemd always pointed at prod's binary. Deleted the orphan. Documented in todo.md deploy-discipline section.
+- **Two ghost repos + one scope memo** — `dylanpersonguy/Polymarket-Trading-Bot` doesn't exist. `echandsome/Polymarket-betting-bot` has no market-making; one useful pattern (WebSocket block-subscription for whale tracker) noted for future. `evan-kolberg/prediction-market-backtesting` scoped as Option B (Python sidecar), deferred until R2 clears. Memo: `docs/backtesting-scoping-2026-04-11.md`.
+- **Standing rule captured:** No patches. Only code updates. Git-first deploy flow. R&D shares prod binary — no rsync step needed.
 
 ## ⚠️ CURRENT STATE — READ FIRST
 

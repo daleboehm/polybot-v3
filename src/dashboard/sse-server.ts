@@ -8,7 +8,7 @@ import type { Engine } from '../core/engine.js';
 import { eventBus } from '../core/event-bus.js';
 import { getEntityPnlView } from '../storage/repositories/entity-repo.js';
 import { getTradesByEntity } from '../storage/repositories/trade-repo.js';
-import { getOpenPositions } from '../storage/repositories/position-repo.js';
+import { getOpenPositions, getOpenPositionsWithMarketMeta } from '../storage/repositories/position-repo.js';
 import { getOrdersByEntity, getOpenOrders } from '../storage/repositories/order-repo.js';
 import { getResolutionsByEntity, getStrategyPerformance } from '../storage/repositories/resolution-repo.js';
 import { getSnapshots } from '../storage/repositories/snapshot-repo.js';
@@ -204,7 +204,33 @@ export class DashboardServer {
         return;
       }
 
-      // Auth check for everything else
+      // Health endpoint — BEFORE auth check so external monitors can ping
+      // it without credentials. Returns 200 when healthy, 503 when not.
+      // Returns a simple JSON with status + staleness flag. UptimeRobot or
+      // any HTTP monitor checks this every 60s and alerts on non-200.
+      if (path === '/api/health') {
+        const stats = this.engine.getStats();
+        const healthy = stats.running && !stats.cycle_stale && !stats.kill_switch?.halted;
+        const status = healthy ? 200 : 503;
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({
+          status: healthy ? 'healthy' : 'unhealthy',
+          running: stats.running,
+          cycle_stale: stats.cycle_stale,
+          ms_since_last_cycle: stats.ms_since_last_cycle,
+          last_cycle_at: stats.last_cycle_at,
+          cycles: stats.cycles,
+          uptime_ms: stats.uptime_ms,
+          ws_connected: stats.ws_connected,
+          kill_switch_halted: stats.kill_switch?.halted ?? false,
+          strategies: stats.strategies,
+          markets_active: stats.markets_active,
+          fast_crypto: stats.fast_crypto_stats,
+        }));
+        return;
+      }
+
+      // Auth check for everything below
       if (this.config.auth_enabled && !this.isAuthenticated(req)) {
         res.writeHead(302, { 'Location': this.basePath + '/login' });
         res.end();
@@ -235,6 +261,10 @@ export class DashboardServer {
         const [, slug, resource] = entityMatch;
         switch (resource) {
           case 'positions': return this.jsonResponse(res, getOpenPositions(slug));
+          // 2026-04-11 Phase 1.6: positions pre-joined with market end_date +
+          // uma_resolution_status so the frontend can render triage states
+          // (overdue / uma_pending / dispute) without a second fetch.
+          case 'positions-with-markets': return this.jsonResponse(res, getOpenPositionsWithMarketMeta(slug));
           case 'trades':    return this.jsonResponse(res, getTradesByEntity(slug, 50));
           case 'orders':    return this.jsonResponse(res, getOrdersByEntity(slug, 50));
           case 'resolutions': return this.jsonResponse(res, getResolutionsByEntity(slug, 50));
@@ -468,7 +498,7 @@ header { background: #0a0e17; border-bottom: 2px solid #f6ad55; padding: 16px 24
 a.back { color: #a0aec0; text-decoration: none; font-size: 0.85em; padding: 6px 12px; border-radius: 6px; border: 1px solid #2d3748; }
 a.back:hover { background: #1a1f2e; color: #e2e8f0; }
 .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
-.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 20px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+.scoreboard { background: #1a1f2e; border: 2px solid #f6ad55; border-radius: 12px; padding: 14px 20px; margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: nowrap; overflow-x: auto; position: sticky; top: 72px; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
 .sb-item { display: flex; flex-direction: column; }
 .sb-label { font-size: 10px; color: #718096; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 6px; }
 .sb-value { font-size: 22px; font-weight: 700; }
@@ -561,10 +591,15 @@ async function load() {
       if (isNaN(d.getTime())) return '<span style="color:#718096">Unknown</span>';
       var now = Date.now();
       var diff = d.getTime() - now;
-      if (diff < 0) return '<span style="color:#10b981">Overdue</span>';
+      if (diff < 0) {
+        var hrsOver = Math.round(Math.abs(diff) / 3600000);
+        if (hrsOver < 48) return '<span style="color:#f6ad55" title="Normal 24-48h oracle window">&#9203; Settling ('+hrsOver+'h)</span>';
+        if (hrsOver < 168) return '<span style="color:#fb923c" title="Resolution delayed">&#9888; Slow ('+Math.round(hrsOver/24)+'d)</span>';
+        return '<span style="color:#ef4444" title="Investigate">&#10060; Overdue ('+Math.round(hrsOver/24)+'d)</span>';
+      }
       var hours = Math.floor(diff / 3600000);
       var days = Math.floor(hours / 24);
-      if (days > 0) return '<span style="color:'+(days <= 2 ? '#f6ad55' : '#718096')+'">'+days+'d '+( hours % 24)+'h</span>';
+      if (days > 0) return '<span style="color:'+(days <= 2 ? '#f6ad55' : '#718096')+'">'+days+'d '+(hours % 24)+'h</span>';
       return '<span style="color:#10b981">'+hours+'h</span>';
     }
     pb.innerHTML = positions.map(p => {
@@ -623,7 +658,7 @@ function connectSSE() {
   function addEvent(text, color) {
     eventCounter++;
     document.getElementById('eventCount').textContent = '('+eventCounter+')';
-    const ts = new Date().toLocaleTimeString();
+    const ts = new Date().toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
     log.innerHTML = '<div style="padding:4px 0;border-bottom:1px solid #1a1f2e"><span style="color:#4a5568">'+ts+'</span> <span style="color:'+color+'">'+text+'</span></div>' + log.innerHTML;
     while (log.children.length > 200) log.lastChild.remove();
   }

@@ -3,20 +3,24 @@
 export interface RiskLimits {
   max_position_pct: number;         // 0.10 = 10%
   max_position_usd: number;         // 20
-  max_positions: number;            // max concurrent open positions per entity
+  // 2026-04-10: max_positions, reserve_ratio, trading_ratio removed per Dale's
+  // directive ("only limit is cash, no reserve"). Trading balance == cash now.
+  // Reserves will return via the central-node sweep pattern when built.
   max_open_orders: number;          // max concurrent open orders per entity
   fractional_kelly: number;         // 0.25
   daily_loss_lockout_usd: number;   // 20
   stop_loss_pct: number;            // 0.20 = -20%
   hard_stop_usd: number;            // 5
   profit_target_pct: number;        // 0.40 = +40%
-  reserve_ratio: number;            // 0.60
-  trading_ratio: number;            // 0.40
   min_edge_threshold: number;       // 0.02 = 2%
   min_hold_hours: number;           // 6
   min_hours_to_resolve?: number;    // 1 — global short-horizon filter floor (Dale 2026-04-10)
   max_hours_to_resolve?: number;    // 48 — global short-horizon filter ceiling
   tiered_stops: TieredStop[];
+  max_strategy_envelope_pct?: number; // 0.25 — per-strategy capital cap (Phase 1.5, 2026-04-11)
+  max_cluster_pct?: number;           // 0.15 — correlated-cluster cap (Phase 2.2, 2026-04-11)
+  trailing_retention_pct?: number;    // 0.70 — trailing profit lock retention (Phase 2.5, 2026-04-11)
+  trailing_activation_pct?: number;   // 0.20 — min PnL % before trailing arms
 }
 
 export interface TieredStop {

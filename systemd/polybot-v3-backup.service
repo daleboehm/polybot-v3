@@ -1,0 +1,21 @@
+[Unit]
+Description=Polybot V3 SQLite Backup (hourly)
+After=polybot-v3.service
+
+[Service]
+Type=oneshot
+User=root
+# Back up both prod and R&D databases. Keep last 24 copies (1 day).
+# SQLite's .backup command is safe to run while the DB is in use (WAL mode).
+ExecStart=/bin/bash -c '\
+  BACKUP_DIR=/opt/polybot-v3/backups && \
+  mkdir -p $BACKUP_DIR && \
+  TS=$(date +%%Y%%m%%d-%%H%%M%%S) && \
+  sqlite3 /opt/polybot-v3/data/polybot.db ".backup $BACKUP_DIR/polybot-$TS.db" && \
+  sqlite3 /opt/polybot-v3-rd/data/rd.db ".backup $BACKUP_DIR/rd-$TS.db" && \
+  echo "Backup complete: $BACKUP_DIR/*-$TS.db" && \
+  find $BACKUP_DIR -name "*.db" -mmin +1440 -delete && \
+  echo "Cleaned backups older than 24h"'
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polybot-v3-backup

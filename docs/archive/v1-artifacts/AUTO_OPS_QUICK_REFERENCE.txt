@@ -1,0 +1,172 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║           AUTO_OPS ORCHESTRATOR — QUICK REFERENCE CARD (v1.0)                   ║
+║                     Polymarket VPS Self-Healing System                          ║
+║                     Deployed: 2026-03-30 | Status: ACTIVE ✓                     ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+WHAT IT DOES (Every 5 Minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✓ Monitors 16 dashboard services → auto-restarts if down (rate-limited: 5/hour)
+✓ Verifies auto_trader.py imports successfully
+✓ Checks position P&L → auto-exits on stop loss (-20%), hard stop (-$5), or profit target (+40%)
+✓ Tracks market availability (weather, crypto, sports, politics)
+✓ Optimizes capital deployment (alerts if underdeployed)
+✓ Runs auto_redeem.py to free up USDC from resolved positions
+✓ Generates centralized alerts for all state changes
+✓ Persists state to disk (cycle count, health, metrics)
+
+OPERATIONAL COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SSH INTO VPS:
+  ssh -i /path/to/key -p 2222 root@178.62.225.235
+
+CHECK STATUS:
+  /opt/polybot/venv/bin/python3 /opt/polybot/auto_ops.py status
+
+VIEW LOGS (last 50 lines):
+  tail -50 /opt/polybot/logs/auto_ops.log
+
+VIEW LOGS (live streaming):
+  tail -f /opt/polybot/logs/auto_ops.log
+
+VIEW RECENT ALERTS:
+  cat /opt/polybot/state/auto_ops_alerts.json | python3 -m json.tool | tail -100
+
+RUN TEST CYCLE (no actions taken):
+  /opt/polybot/venv/bin/python3 /opt/polybot/auto_ops.py test
+
+RUN MANUAL CYCLE:
+  /opt/polybot/venv/bin/python3 /opt/polybot/auto_ops.py run
+
+VERIFY CRON JOB:
+  crontab -l | grep auto_ops
+
+CHECK ORCHESTRATOR PROCESS:
+  ps aux | grep auto_ops.py
+
+CLEAR STUCK LOCK FILE (if necessary):
+  rm /opt/polybot/state/auto_ops.lock
+
+FILES & LOCATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Script:              /opt/polybot/auto_ops.py (26 KB, executable)
+Logs:                /opt/polybot/logs/auto_ops.log
+State:               /opt/polybot/state/auto_ops_state.json
+Alerts:              /opt/polybot/state/auto_ops_alerts.json
+Lock:                /opt/polybot/state/auto_ops.lock
+Markets:             /opt/polybot/state/market_availability.json
+
+CRON JOB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*/5 * * * * cd /opt/polybot && /opt/polybot/venv/bin/python3 /opt/polybot/auto_ops.py run >> /opt/polybot/logs/auto_ops.log 2>&1
+
+Runs every 5 minutes (00:00, 00:05, 00:10, ... 23:55)
+Output appended to auto_ops.log
+Exit code: 0 = success, 1 = failure
+
+RATE LIMITS (Safety Guardrails)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Maximum service restarts per hour:       5 (prevents restart loops)
+Maximum position exits per cycle:        3 (prevents market impact)
+Maximum alerts in memory:                200 (rolling buffer)
+Maximum concurrent cycles:               1 (binary lock enforces)
+
+ALERT LEVELS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL:       System integrity at risk — immediate investigation required
+WARNING:        Degraded operation or approaching threshold — monitor closely
+ACTION_TAKEN:   Orchestrator executed autonomous action — review for correctness
+INFO:           Informational state change — logged for audit trail
+
+ALERT CATEGORIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+service:        Service restart actions
+trading:        Trading engine health (imports, stalls)
+position:       Position exits and P&L management
+market:         Market availability changes
+capital:        Capital deployment and utilization
+system:         Disk, memory, load average
+strategy:       Strategy performance and reallocation
+
+P&L EXIT THRESHOLDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Stop Loss:      P&L ≤ -20%      → Sell immediately
+Hard Stop:      Loss ≥ $5 USD   → Sell immediately
+Profit Target:  P&L ≥ +40%      → Sell immediately
+
+DASHBOARD SERVICES MONITORED (16 total)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armorstack-dashboard.service
+armorstack-marketing-dashboard.service
+armorstack-tax-dashboard.service
+armorstack-te-dashboard.service
+caspian-intl-dashboard.service
+dh-debt-dashboard.service
+hr-dashboard.service
+jw-debt-dashboard.service
+ldb-education-dashboard.service
+legal-dashboard.service
+lilac-dashboard.service
+master-dashboard.service
+ms-debt-dashboard.service
+njb-education-dashboard.service
+parkside-dashboard.service
+
+TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Problem: "Another auto_ops instance is running"
+Solution: rm /opt/polybot/state/auto_ops.lock && run cycle again
+
+Problem: Service repeatedly restarting
+Solution: Check service logs: systemctl status SERVICE_NAME
+         If flaky, consider disabling auto-restart for that service
+
+Problem: Trading engine import fails
+Solution: Check error in logs: tail -50 /opt/polybot/logs/auto_ops.log
+         Restore from backup: cp /opt/polybot/auto_trader.py.bak /opt/polybot/auto_trader.py
+
+Problem: Disk space critical (>90%)
+Solution: Compress old logs: gzip /opt/polybot/logs/*.log.1
+         Delete old backups: rm /opt/polybot/backups/*.py.bak* (keep 2-3 recent)
+
+EXAMPLE ALERT (from JSON)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{
+  "timestamp": "2026-03-30T06:29:23.516042",
+  "severity": "ACTION_TAKEN",
+  "category": "position",
+  "title": "Exited position pos_12345",
+  "detail": "Reason: Stop loss hit: -20.5%",
+  "action_taken": "SELL order placed for pos_12345"
+}
+
+DAILY MONITORING CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[ ] Check orchestrator status: auto_ops.py status
+[ ] Review CRITICAL alerts: grep CRITICAL /opt/polybot/state/auto_ops_alerts.json
+[ ] Verify cron job is active: crontab -l | grep auto_ops
+[ ] Monitor disk usage: df -h /opt/polybot
+[ ] Check trading engine: grep "auto_trader" /opt/polybot/logs/auto_ops.log
+
+SUPPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For detailed operations guide:     See AUTO_OPS_OPERATIONS_GUIDE.md
+For technical architecture:        See AUTO_OPS_TECHNICAL_SPEC.md
+For deployment details:            See AUTO_OPS_DEPLOYMENT_SUMMARY.md
+
+VPS Details
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Host:           178.62.225.235
+Port:           2222
+User:           root
+SSH Key:        /path/to/armorstack_vps_key
+Python:         /opt/polybot/venv/bin/python3
+Home:           /opt/polybot
+
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                    Status: PRODUCTION ACTIVE ✓                                 ║
+║                    Zero human intervention required                            ║
+║                    Fully autonomous, rate-limited, observable                  ║
+╚════════════════════════════════════════════════════════════════════════════════╝

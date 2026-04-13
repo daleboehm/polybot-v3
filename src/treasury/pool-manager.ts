@@ -129,7 +129,7 @@ export class PoolManager {
           entity.config.slug,
           entity.cash_balance - excess,
           entity.reserve_balance,
-          (entity.cash_balance - excess) * 0.4, // trading_ratio placeholder
+          entity.cash_balance - excess, // trading_balance == cash (2026-04-10)
         );
       }
     }

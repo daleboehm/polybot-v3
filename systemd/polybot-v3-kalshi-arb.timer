@@ -1,0 +1,16 @@
+[Unit]
+Description=Polybot V3 Kalshi Arb Scanner — every 6 hours
+Requires=polybot-v3-kalshi-arb.service
+
+[Timer]
+# 6-hour cadence is plenty for cross-venue price divergence — Kalshi books
+# don't move THAT fast, and we're scanning read-only. First run 20 min after
+# boot (let the engine settle + other timers land first).
+OnBootSec=20min
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=5min
+Unit=polybot-v3-kalshi-arb.service
+
+[Install]
+WantedBy=timers.target

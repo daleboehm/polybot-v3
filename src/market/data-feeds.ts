@@ -132,8 +132,12 @@ export async function getEnsembleSpread(city: string): Promise<EnsembleData | nu
   if (!coords) return null;
 
   try {
-    // Open-Meteo ensemble endpoint — returns all 51 ECMWF members
-    const url = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${coords[0]}&longitude=${coords[1]}&daily=temperature_2m_max&forecast_days=3&temperature_unit=fahrenheit&timezone=auto&models=ecmwf_ifs025`;
+    // Open-Meteo ensemble endpoint — Phase R1.2 upgrade (2026-04-12):
+    // switched from ecmwf_ifs025 (classical ECMWF IFS) to ecmwf_aifs025
+    // (AI-powered ECMWF AIFS ENS, launched July 2025, 20% more accurate
+    // on temperature per ECMWF benchmarks). Returns 50 ensemble members +
+    // a control run. CC-BY-4.0 license, free, no API key.
+    const url = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${coords[0]}&longitude=${coords[1]}&daily=temperature_2m_max&forecast_days=3&temperature_unit=fahrenheit&timezone=auto&models=ecmwf_aifs025`;
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return null;
 

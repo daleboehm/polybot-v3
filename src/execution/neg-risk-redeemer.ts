@@ -1,4 +1,4 @@
-// NegRiskAdapter on-chain redemption — v3-owned, replaces legacy v1 auto_redeem.py cron.
+// NegRiskAdapter on-chain redemption — v3-native.
 //
 // Polymarket negative-risk markets (weather, crypto, multi-outcome events) settle via
 // the NegRiskAdapter contract at 0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296 on Polygon.
@@ -6,9 +6,9 @@
 // convert their winning conditional tokens back to USDC.
 //
 // Requires: the wallet must have previously called CTF.setApprovalForAll(adapter, true).
-// v1's auto_redeem.py did this as a one-time setup; v3 assumes approval is already granted.
-// If it isn't, redeemPositions will revert with an approval error and the reconciler
-// will log + skip until Dale manually runs the approval tx.
+// v3 assumes approval is already granted. If it isn't, redeemPositions will revert with
+// an approval error and the reconciler will log + skip until the approval tx is manually
+// submitted.
 
 import { createWalletClient, createPublicClient, http, parseAbi, type Address, type Hex } from 'viem';
 import { polygon } from 'viem/chains';
@@ -17,16 +17,13 @@ import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('neg-risk-redeemer');
 
-// Polymarket negative-risk adapter on Polygon mainnet.
-// Source: Polymarket/auto_redeem.py:42 — the ADAPTER, not the exchange.
+// Polymarket negative-risk adapter on Polygon mainnet (the ADAPTER contract, not the exchange).
 export const NEG_RISK_ADAPTER: Address = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
 
 // Conditional Tokens Framework (ERC-1155 holding YES/NO tokens).
-// Source: Polymarket/auto_redeem.py:41.
 export const CTF_ADDRESS: Address = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 
 // USDC on Polygon (for balance checks pre/post redemption).
-// Source: Polymarket/auto_redeem.py:43.
 export const USDC_ADDRESS: Address = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 
 const NEG_RISK_ABI = parseAbi([
@@ -36,22 +33,19 @@ const NEG_RISK_ABI = parseAbi([
 const CTF_ABI = parseAbi([
   'function balanceOf(address account, uint256 id) view returns (uint256)',
   'function isApprovedForAll(address owner, address operator) view returns (bool)',
+  // Standard CTF redemption (non-negRisk markets). Burns ALL held tokens
+  // for the specified condition and pays out USDC for winning outcomes.
+  // indexSets [1, 2] = redeem both YES and NO outcomes.
+  'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)',
 ]);
 
 const USDC_ABI = parseAbi([
   'function balanceOf(address account) view returns (uint256)',
 ]);
 
-// Ordered list of Polygon RPCs. On failure we fall through to the next.
-// 2026-04-10: removed `rpc.ankr.com/polygon` (now requires API key, returns 401)
-// and `polygon.meowrpc.com` (404s). Kept drpc and publicnode which still work anonymously.
-// Added polygon-rpc.com (the canonical public RPC) as a first-choice.
-const DEFAULT_POLYGON_RPCS: string[] = [
-  'https://polygon-rpc.com',
-  'https://polygon.drpc.org',
-  'https://polygon-bor-rpc.publicnode.com',
-  'https://rpc.polygon.io',
-];
+// 2026-04-13: RPC URLs now centralized in src/market/rpc-config.ts.
+// Set POLYGON_RPC_URL in .env for Alchemy/paid endpoint as primary.
+import { getPolygonRpcs } from '../market/rpc-config.js';
 
 export interface RedemptionResult {
   success: boolean;
@@ -72,7 +66,7 @@ export class NegRiskRedeemer {
     if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
       throw new Error('NegRiskRedeemer: privateKey must be a 0x-prefixed 32-byte hex string');
     }
-    this.rpcUrls = rpcUrls && rpcUrls.length > 0 ? rpcUrls : DEFAULT_POLYGON_RPCS;
+    this.rpcUrls = rpcUrls && rpcUrls.length > 0 ? rpcUrls : getPolygonRpcs();
   }
 
   /**
@@ -151,6 +145,98 @@ export class NegRiskRedeemer {
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         log.warn({ rpc: rpcUrl, err: lastError }, 'RPC attempt failed, falling through');
+      }
+    }
+
+    return {
+      success: false,
+      usdcBefore: 0n,
+      usdcAfter: 0n,
+      usdcClaimed: 0n,
+      error: lastError ?? 'all RPC endpoints failed',
+    };
+  }
+
+  /**
+   * Redeem a standard (non-negRisk) CTF market's positions. Calls
+   * `CTF.redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)`
+   * which burns ALL held tokens for the condition and pays out USDC for
+   * winning outcomes.
+   *
+   * Key differences from negRisk redeem:
+   *   - Called on the CTF contract directly, not through the NegRiskAdapter
+   *   - No amounts array — burns entire balance automatically
+   *   - indexSets [1, 2] = redeem both YES (index 1) and NO (index 2) outcomes
+   *   - parentCollectionId is always bytes32(0) for top-level conditions
+   */
+  async redeemCtf(conditionId: Hex): Promise<RedemptionResult> {
+    const account = privateKeyToAccount(this.privateKey);
+    let lastError: string | undefined;
+    const PARENT_COLLECTION_ID = '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex;
+    const INDEX_SETS = [1n, 2n]; // Redeem both outcomes
+
+    for (const rpcUrl of this.rpcUrls) {
+      try {
+        const publicClient = createPublicClient({ chain: polygon, transport: http(rpcUrl) });
+        const walletClient = createWalletClient({ account, chain: polygon, transport: http(rpcUrl) });
+
+        const usdcBefore = await publicClient.readContract({
+          address: USDC_ADDRESS,
+          abi: USDC_ABI,
+          functionName: 'balanceOf',
+          args: [account.address],
+        });
+
+        log.info(
+          {
+            conditionId: conditionId.substring(0, 20) + '...',
+            wallet: account.address,
+            rpc: rpcUrl,
+          },
+          'Submitting CTF redeemPositions tx',
+        );
+
+        const txHash = await walletClient.writeContract({
+          address: CTF_ADDRESS,
+          abi: CTF_ABI,
+          functionName: 'redeemPositions',
+          args: [USDC_ADDRESS, PARENT_COLLECTION_ID, conditionId, INDEX_SETS],
+        });
+
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: txHash,
+          timeout: 120_000,
+        });
+
+        if (receipt.status !== 'success') {
+          lastError = `tx ${txHash} reverted`;
+          log.warn({ txHash, conditionId: conditionId.substring(0, 20) + '...' }, 'CTF redeemPositions reverted');
+          continue;
+        }
+
+        const usdcAfter = await publicClient.readContract({
+          address: USDC_ADDRESS,
+          abi: USDC_ABI,
+          functionName: 'balanceOf',
+          args: [account.address],
+        });
+
+        const usdcClaimed = usdcAfter - usdcBefore;
+
+        log.info(
+          {
+            conditionId: conditionId.substring(0, 20) + '...',
+            txHash,
+            usdcClaimed: usdcClaimed.toString(),
+            blockNumber: receipt.blockNumber.toString(),
+          },
+          'CTF redemption successful',
+        );
+
+        return { success: true, txHash, usdcBefore, usdcAfter, usdcClaimed };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        log.warn({ rpc: rpcUrl, err: lastError }, 'CTF RPC attempt failed, falling through');
       }
     }
 

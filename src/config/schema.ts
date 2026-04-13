@@ -11,15 +11,17 @@ const tieredStopSchema = z.object({
 const riskLimitsSchema = z.object({
   max_position_pct: z.number().min(0).max(1).default(0.10),
   max_position_usd: z.number().min(0).default(20),
-  max_positions: z.number().int().min(1).default(40),
+  // 2026-04-10: removed max_positions, reserve_ratio, trading_ratio.
+  // Dale's directive: "the only limit should be cash. No limit on positions,
+  // no reserve." Trading balance is now always equal to cash balance.
+  // When reserves come back, it'll be via the central-node sweep pattern,
+  // not these knobs — this is a clean slate.
   max_open_orders: z.number().int().min(1).default(5),
   fractional_kelly: z.number().min(0).max(1).default(0.25),
   daily_loss_lockout_usd: z.number().min(0).default(20),
   stop_loss_pct: z.number().min(0).max(1).default(0.20),
   hard_stop_usd: z.number().positive().default(5),
   profit_target_pct: z.number().min(0).default(0.40),
-  reserve_ratio: z.number().min(0).max(1).default(0.60),
-  trading_ratio: z.number().min(0).max(1).default(0.40),
   min_edge_threshold: z.number().min(0).default(0.02),
   min_hold_hours: z.number().min(0).default(6),
   // Dale 2026-04-10: global short-horizon filter. Only take positions that
@@ -29,6 +31,24 @@ const riskLimitsSchema = z.object({
   min_hours_to_resolve: z.number().min(0).default(1),
   max_hours_to_resolve: z.number().min(0).default(48),
   tiered_stops: z.array(tieredStopSchema).default([]),
+  // 2026-04-11 Phase 1.5: per-strategy capital envelope. Each strategy_id
+  // can tie up at most this fraction of trading_balance before the risk
+  // engine blocks new entries. Orphan positions (strategy_id = NULL) are
+  // counted under "__orphan" and share the same default cap. A buggy
+  // strategy cannot drain the bankroll; it gets its envelope and stops.
+  // Set to 0 to disable the check entirely.
+  max_strategy_envelope_pct: z.number().min(0).max(1).default(0.25),
+  // Phase 2.2: cap on any single correlated cluster (same neg_risk_market_id,
+  // keyword cluster like "us-election-2026", or weather-day grouping).
+  // Default 0.15 = 15% of trading_balance. Set to 0 to disable.
+  max_cluster_pct: z.number().min(0).max(1).default(0.15),
+  // Phase 2.5: trailing profit lock. Tracks peak unrealized PnL % per
+  // position. When current PnL drops below peak * trailing_retention_pct,
+  // trigger a profit-target exit at the retained level. Never fires below
+  // 0% PnL, so the NO-LOSE mantra is preserved — this is upside protection,
+  // not a stop-loss. Set trailing_retention_pct to 0 to disable.
+  trailing_retention_pct: z.number().min(0).max(1).default(0.70),
+  trailing_activation_pct: z.number().min(0).max(1).default(0.20),
 });
 
 const engineConfigSchema = z.object({
@@ -83,6 +103,31 @@ const advisorConfigSchema = z.object({
   thresholds: advisorThresholdsSchema.default({}),
 });
 
+// Phase 2 (2026-04-11): attention router. Runs a small out-of-cycle scan
+// every N seconds on markets that scouts have flagged as high-priority
+// via the market_priorities table. Defaults keep it enabled with a 30s
+// cadence — on engines where the scouts are not running, the scanner
+// finds an empty priority table and does nothing, which is harmless.
+const priorityScannerConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  interval_ms: z.number().positive().default(30_000),
+  max_priorities_per_run: z.number().int().positive().default(25),
+  min_scan_gap_ms: z.number().int().nonnegative().default(60_000),
+  gc_every_n_runs: z.number().int().positive().default(60),
+});
+
+// Phase 4 (2026-04-11): in-process scout fleet. The ScoutCoordinator
+// runs all registered scouts on a single timer. Each scout watches the
+// market cache for a specific pattern and writes priority/intel rows.
+// disabled_scouts can be used to kill individual scouts from yaml
+// without touching code (e.g. `disabled_scouts: ['llm-news-scout']` if
+// the API key is missing and we don't want a dormant scout in the loop).
+const scoutsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  interval_ms: z.number().positive().default(60_000),
+  disabled_scouts: z.array(z.string()).default([]),
+});
+
 export const defaultConfigSchema = z.object({
   engine: engineConfigSchema,
   risk: riskLimitsSchema,
@@ -91,6 +136,8 @@ export const defaultConfigSchema = z.object({
   dashboard: dashboardConfigSchema,
   database: databaseConfigSchema,
   advisor: advisorConfigSchema.default({}),
+  priority_scanner: priorityScannerConfigSchema.default({}),
+  scouts: scoutsConfigSchema.default({}),
 });
 
 const entityStrategyConfigSchema = z.object({

@@ -14,7 +14,10 @@
 
 import type { Signal, RiskLimits, EntityState } from '../types/index.js';
 import type { StrategyWeighter } from './strategy-weighter.js';
+import type { MarketCache } from '../market/market-cache.js';
 import { kellySize, roundTo } from '../utils/math.js';
+import { computeLiquidityBound, logLiquidityEvent } from './liquidity-check.js';
+import { washTradingMultiplier, logPenaltyDecision } from '../market/wash-trading-penalty.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('position-sizer');
@@ -32,6 +35,7 @@ export function calculatePositionSize(
   entity: EntityState,
   limits: RiskLimits,
   strategyWeighter?: StrategyWeighter,
+  marketCache?: MarketCache,
 ): SizingResult {
   const tradingBalance = entity.trading_balance;
   if (tradingBalance <= 0) {
@@ -61,6 +65,27 @@ export function calculatePositionSize(
     sizeUsd = sizeUsd * stratWeight;
   }
 
+  // 2b. Phase A3 (2026-04-11): wash-trading penalty. Columbia Nov 2025 study
+  //     found ~25% of Polymarket volume is fake (peaked 60% Dec 2024, 90%+
+  //     in sports/election airdrop windows). We size by volume_24h today
+  //     and systematically over-allocate to fake-liquidity markets.
+  //     Proxy signal: (volume_24h / liquidity) churn ratio + category tags.
+  //     Applied BEFORE the hard caps so it can never exceed them, but AFTER
+  //     the strategy weight so a "trusted" strategy still gets proportional
+  //     haircut on a suspicious market.
+  let washMultiplier = 1.0;
+  let washReason: string | null = null;
+  if (marketCache) {
+    const market = marketCache.get(signal.condition_id);
+    if (market) {
+      const penalty = washTradingMultiplier(market);
+      washMultiplier = penalty.multiplier;
+      washReason = penalty.reason;
+      logPenaltyDecision(signal.condition_id, penalty);
+      sizeUsd = sizeUsd * washMultiplier;
+    }
+  }
+
   // 3. Apply hard caps LAST — they're the binding constraint.
   let method: SizingResult['method'] = 'kelly';
   let cappedBy: string | undefined;
@@ -80,13 +105,56 @@ export function calculatePositionSize(
     cappedBy = `$${limits.max_position_usd} absolute cap`;
   }
 
-  // Floor: don't trade dust
-  sizeUsd = roundTo(sizeUsd, 2);
-  if (sizeUsd < 0.10) {
-    return { size_usd: 0, size_shares: 0, method: 'minimum', strategy_weight: stratWeight };
+  // 2026-04-11 Phase 1.3: liquidity-aware bound. Refuse to walk the book
+  // more than ~2% on the avg fill. Pure defensive layer — we never INCREASE
+  // size here, only shrink. Failing gracefully if the book is unavailable
+  // (returns the requested size + logs a warning).
+  if (marketCache) {
+    const book = marketCache.getOrderbook(signal.token_id);
+    const liq = computeLiquidityBound(sizeUsd, signal.market_price, book, {
+      maxSlippagePct: 0.02,
+    });
+    logLiquidityEvent(liq, {
+      strategy_id: signal.strategy_id,
+      condition_id: signal.condition_id,
+      token_id: signal.token_id,
+    });
+    if (liq.max_size_usd < sizeUsd) {
+      sizeUsd = liq.max_size_usd;
+      method = 'cap';
+      cappedBy = `liquidity bound (avg fill ${liq.avg_fill_price.toFixed(3)} vs midpoint ${signal.market_price.toFixed(3)})`;
+    }
   }
 
-  const sizeShares = sizeUsd / signal.market_price;
+  // 2026-04-11 fix: Polymarket CLOB enforces a minimum order size of 5 SHARES
+  // (not USD — 5 conditional tokens). At a favorite priced $0.80, that's $4.00.
+  // At $0.50, it's $2.50. Kelly-produced sub-5-share sizes get rejected by the
+  // CLOB with `Size (1.43) lower than the minimum: 5` and the position never
+  // opens. Prior to this fix, the dust floor was $0.10 which never triggered
+  // but also never clamped to the real CLOB minimum — most signals silently
+  // died at the CLOB layer.
+  //
+  // New rule: compute share count first, then clamp to max(5, sizer output).
+  // If the resulting USD exceeds the position cap, reject the signal entirely
+  // (can't open a valid-size position within the cap). If it fits, trade
+  // exactly 5 shares at the signal price.
+  const POLYMARKET_MIN_SHARES = 5.0;
+  let sizeShares = sizeUsd / signal.market_price;
+  if (sizeShares < POLYMARKET_MIN_SHARES) {
+    const minUsdForFloor = POLYMARKET_MIN_SHARES * signal.market_price;
+    // Can we afford 5 shares at this price under the cap?
+    if (minUsdForFloor <= pctCap && (limits.max_position_usd <= 0 || minUsdForFloor <= limits.max_position_usd)) {
+      sizeShares = POLYMARKET_MIN_SHARES;
+      sizeUsd = roundTo(minUsdForFloor, 2);
+      method = 'minimum';
+      cappedBy = 'floor at Polymarket 5-share minimum';
+    } else {
+      // Cap is too tight for a 5-share position at this price. Skip.
+      return { size_usd: 0, size_shares: 0, method: 'minimum', strategy_weight: stratWeight, capped_by: `Kelly ${sizeShares.toFixed(2)} shares < 5 min, cap too tight` };
+    }
+  }
+
+  sizeUsd = roundTo(sizeUsd, 2);
 
   log.debug({
     entity: signal.entity_slug,
@@ -97,6 +165,8 @@ export function calculatePositionSize(
     method,
     capped_by: cappedBy,
     strategy_weight: stratWeight,
+    wash_multiplier: washMultiplier,
+    wash_reason: washReason,
   }, 'Position sized');
 
   return { size_usd: sizeUsd, size_shares: roundTo(sizeShares, 2), method, capped_by: cappedBy, strategy_weight: stratWeight };
