@@ -885,15 +885,25 @@ program
     }
 
     // Initialize the CLOB client for sell orders
-    // Dynamic import of the CLOB client + its Side enum. The SDK
-    // exports Side as an enum with Side.BUY / Side.SELL values. We
-    // need to use the enum member, not a string literal.
+    // Dynamic import of the CLOB client + its Side enum + viem for signing.
     const mod = await import('@polymarket/clob-client');
     const { ClobClient } = mod;
+    const { createWalletClient, http } = await import('viem');
+    const { polygon } = await import('viem/chains');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const privateKeyHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const account = privateKeyToAccount(privateKeyHex);
+    const walletClient = createWalletClient({
+      account,
+      chain: polygon,
+      transport: http('https://polygon.drpc.org'),
+    });
     const client = new ClobClient(
       config.api.clob_base_url,
-      137, // Polygon chain ID
-      undefined, // no signer for read-only
+      137,
+      walletClient,
       {
         key: creds.api_key,
         secret: creds.api_secret,
