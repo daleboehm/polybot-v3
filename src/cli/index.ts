@@ -810,6 +810,126 @@ program
     process.exit(failures > 0 ? 1 : 0);
   });
 
+// ─── SELL-POSITION ──────────────────────────────────────────
+// Emergency/manual sell of a specific open position at market price.
+// Used to exit dead-weight positions (e.g., long-dated political markets)
+// that the engine won't exit on its own because they haven't hit any
+// exit trigger (stop-loss, profit-target, trailing-lock).
+//
+// Usage:
+//   polybot sell-position --entity polybot --condition 0xc8c5760c2649...
+//   polybot sell-position --entity polybot --all-untagged  (sells all positions with no strategy_id)
+program
+  .command('sell-position')
+  .description('Sell a specific open position at market price (or all untagged positions)')
+  .requiredOption('--entity <slug>', 'Entity slug')
+  .option('--condition <id>', 'Condition ID to sell')
+  .option('--all-untagged', 'Sell all positions with no strategy_id (legacy orphans)', false)
+  .option('--dry-run', 'Show what would be sold without submitting', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) {
+      console.error(`Entity ${opts.entity} not found`);
+      process.exit(1);
+    }
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key || !creds.api_key) {
+      console.error(`No wallet credentials for ${opts.entity}`);
+      process.exit(1);
+    }
+
+    // Find positions to sell
+    type PosRow = { condition_id: string; token_id: string; side: string; size: number; avg_entry_price: number; cost_basis: number; market_question: string; strategy_id: string | null };
+    let positions: PosRow[];
+    if (opts.allUntagged) {
+      positions = db.prepare(
+        `SELECT condition_id, token_id, side, size, avg_entry_price, cost_basis, market_question, strategy_id
+         FROM positions WHERE entity_slug = ? AND status = 'open' AND (strategy_id IS NULL OR strategy_id = '')`,
+      ).all(opts.entity) as PosRow[];
+    } else if (opts.condition) {
+      positions = db.prepare(
+        `SELECT condition_id, token_id, side, size, avg_entry_price, cost_basis, market_question, strategy_id
+         FROM positions WHERE entity_slug = ? AND status = 'open' AND condition_id LIKE ?`,
+      ).all(opts.entity, opts.condition + '%') as PosRow[];
+    } else {
+      console.error('Must specify --condition <id> or --all-untagged');
+      process.exit(1);
+    }
+
+    console.log(`\n=== Sell Positions ===`);
+    console.log(`Entity:     ${opts.entity}`);
+    console.log(`Positions:  ${positions.length}`);
+    console.log(`Dry run:    ${opts.dryRun ? 'YES' : 'NO'}`);
+    console.log();
+
+    if (positions.length === 0) {
+      console.log('No matching positions found.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    for (const p of positions) {
+      console.log(`  ${p.condition_id.substring(0, 14)} | ${p.side} | ${p.size} shares @ $${p.avg_entry_price.toFixed(3)} | cost=$${p.cost_basis.toFixed(2)} | ${(p.market_question || '').substring(0, 50)}`);
+    }
+    console.log();
+
+    if (opts.dryRun) {
+      console.log('DRY RUN — not submitting any sells.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    // Initialize the CLOB client for sell orders
+    const { ClobClient } = await import('@polymarket/clob-client');
+    const client = new ClobClient(
+      config.api.clob_base_url,
+      137, // Polygon chain ID
+      undefined, // no signer for read-only
+      {
+        key: creds.api_key,
+        secret: creds.api_secret,
+        passphrase: creds.api_passphrase,
+      },
+    );
+
+    let sold = 0;
+    let failed = 0;
+    for (const p of positions) {
+      console.log(`Selling ${p.condition_id.substring(0, 14)}...`);
+      try {
+        // Create a market sell order — sell at the current best bid
+        // by using a limit order priced at 0.01 (floor price, guarantees
+        // it crosses the book immediately like a market order)
+        const userOrder = {
+          tokenID: p.token_id,
+          price: 0.01, // effectively market sell — matches any bid
+          size: p.size,
+          side: 'SELL' as const,
+        };
+        const signedOrder = await client.createOrder(userOrder);
+        const response = await client.postOrder(signedOrder);
+        console.log(`  OK: ${JSON.stringify(response).substring(0, 200)}`);
+        sold++;
+      } catch (err) {
+        console.log(`  FAIL: ${err instanceof Error ? err.message : String(err)}`);
+        failed++;
+      }
+    }
+
+    console.log(`\n=== Summary ===`);
+    console.log(`Sold:    ${sold}`);
+    console.log(`Failed:  ${failed}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(failed > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')
