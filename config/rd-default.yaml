@@ -3,7 +3,10 @@ engine:
   scan_interval_ms: 120000        # 2 minutes — faster iteration for R&D
   snapshot_interval_ms: 1800000   # 30 minutes
   risk_check_interval_ms: 60000
-  orderbook_subscribe: false       # Save resources — R&D doesn't need real-time books
+  # 2026-04-13: enabled for R&D so the FastCryptoEvaluator runs on both
+  # engines. R&D paper-sim uses book data for maker fill gating, and the
+  # fast evaluator gives R&D the same 10-second BTC reaction as prod.
+  orderbook_subscribe: true
   max_concurrent_orders: 20        # Higher for R&D — paper trades are cheap
   log_level: info
 
