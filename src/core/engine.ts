@@ -50,6 +50,7 @@ import type { ExitSignal } from '../risk/stop-loss-monitor.js';
 import { PaperResolver } from '../market/paper-resolver.js';
 import { nanoid } from 'nanoid';
 import { eventBus } from './event-bus.js';
+import { killSwitch } from './kill-switch.js';
 import { createChildLogger } from './logger.js';
 
 const log = createChildLogger('engine');
