@@ -218,11 +218,13 @@ export class PriorityScanner {
 
           const decision = this.deps.riskEngine.evaluate(signal, entity);
           if (decision.risk_approved && decision.order_request) {
+            const tokenBook = this.deps.marketCache.getOrderbook(signal.token_id);
             const order = buildOrder(
               decision,
               entity,
               this.deps.executionConfig.slippage_bps,
               this.deps.executionConfig.bid_premium_pct,
+              tokenBook,
             );
             if (order) {
               try {

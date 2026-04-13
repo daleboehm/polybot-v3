@@ -2,7 +2,9 @@
 
 import type { Order, OrderRequest, StrategyDecision } from '../types/index.js';
 import type { EntityState } from '../types/index.js';
+import type { OrderBookSnapshot } from '../types/index.js';
 import { roundToTick, applySlippage, roundTo } from '../utils/math.js';
+import { checkBookQuality } from './book-quality-check.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../core/logger.js';
 
@@ -71,6 +73,7 @@ export function buildOrder(
   entity: EntityState,
   slippageBps: number,
   bidPremiumPct: number,
+  orderbook?: OrderBookSnapshot | null,
 ): Order | null {
   const req = decision.order_request;
   if (!req) return null;
@@ -78,6 +81,29 @@ export function buildOrder(
   const isPaper = entity.config.mode === 'paper';
   const isExit = isExitDecision(decision);
   const preferredMode = readPreferredExecutionMode(decision);
+
+  // 2026-04-13: pre-trade book quality check. Defends against Polymarket
+  // CLOB bugs: ghost fills, zero-balance phantom orders, pulled-back
+  // market maker liquidity. If the book looks unhealthy, skip the trade.
+  // Exits bypass — if we need out, we trade regardless of book quality.
+  // Paper mode bypasses — paper-sim doesn't use real books.
+  if (!isExit && !isPaper && orderbook) {
+    const quality = checkBookQuality(orderbook, req.side);
+    if (!quality.passed) {
+      log.info({
+        entity: req.entity_slug,
+        strategy: req.strategy_id,
+        condition: req.condition_id?.substring(0, 14),
+        side: req.side,
+        reason: quality.reason,
+        bid_levels: quality.bid_levels,
+        ask_levels: quality.ask_levels,
+        top_bid_size: quality.top_bid_size,
+        top_ask_size: quality.top_ask_size,
+      }, 'Order refused by book quality check');
+      return null;
+    }
+  }
 
   // Phase A4 (2026-04-11): price-conditioned maker-only gate.
   //

@@ -664,11 +664,14 @@ export class Engine {
 
         const decision = this.riskEngine.evaluate(signal, entity);
         if (decision.risk_approved && decision.order_request) {
+          // 2026-04-13: pass orderbook for pre-trade quality check
+          const tokenBook = this.marketCache.getOrderbook(signal.token_id);
           const order = buildOrder(
             decision,
             entity,
             this.config.execution.slippage_bps,
             this.config.execution.bid_premium_pct,
+            tokenBook,
           );
 
           if (order) {
