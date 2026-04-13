@@ -593,24 +593,15 @@ program
     console.log(`Wallet:            ${proxyOrEoa}`);
     console.log(`Total positions:   ${allPositions.length}`);
     console.log(`Redeemable:        ${redeemable.length}`);
-    console.log(`  negRisk:         ${negRiskRedeemable.length} (handled by this command)`);
-    console.log(`  non-negRisk:     ${otherRedeemable.length} (SKIPPED — needs separate CTF Exchange redemption path)`);
+    console.log(`  negRisk:         ${negRiskRedeemable.length} (NegRiskAdapter.redeemPositions)`);
+    console.log(`  non-negRisk:     ${otherRedeemable.length} (CTF.redeemPositions — burns entire balance)`);
     console.log(`Dry run:           ${opts.dryRun ? 'YES' : 'NO'}`);
     const limit = Number(opts.limit) || 0;
     if (limit > 0) console.log(`Limit:             ${limit}`);
     console.log();
 
-    if (otherRedeemable.length > 0) {
-      console.log(`Non-negRisk redeemable positions (skipped):`);
-      for (const p of otherRedeemable) {
-        const v = Number(p.currentValue) || 0;
-        console.log(`  [${p.outcome}] \$${v.toFixed(4)}  ${p.title?.substring(0, 60)}`);
-      }
-      console.log();
-    }
-
-    if (negRiskRedeemable.length === 0) {
-      console.log('Nothing to redeem via NegRiskAdapter.');
+    if (redeemable.length === 0) {
+      console.log('Nothing to redeem.');
       closeDatabase();
       process.exit(0);
     }
@@ -737,7 +728,79 @@ program
       console.log();
     }
 
-    console.log(`=== Summary ===`);
+    console.log(`=== NegRisk Summary ===`);
+    console.log(`Successes:      ${successes}`);
+    console.log(`Failures:       ${failures}`);
+    console.log(`USDC claimed:   $${(Number(totalClaimedMicro) / 1e6).toFixed(4)}`);
+    console.log();
+
+    // ─── Non-negRisk redemption via CTF.redeemPositions ───
+    // These positions use the standard CTF contract directly. The call
+    // burns ALL held tokens for the conditionId — no amounts array.
+    // Much simpler than negRisk but uses a different contract function.
+    if (otherRedeemable.length > 0) {
+      console.log(`\n=== Non-NegRisk Redemption (CTF Exchange) ===`);
+      const ctfByCondition = new Map<string, { title: string; totalValue: number; cashPnl: number }>();
+      for (const p of otherRedeemable) {
+        const existing = ctfByCondition.get(p.conditionId) ?? { title: p.title || '?', totalValue: 0, cashPnl: 0 };
+        existing.totalValue += Number(p.currentValue) || 0;
+        existing.cashPnl += Number(p.cashPnl) || 0;
+        ctfByCondition.set(p.conditionId, existing);
+      }
+      console.log(`Unique conditions: ${ctfByCondition.size}`);
+      console.log();
+
+      let ctfSuccesses = 0;
+      let ctfFailures = 0;
+      let ctfClaimedMicro = 0n;
+      let ctfIdx = 0;
+      for (const [conditionId, agg] of ctfByCondition.entries()) {
+        ctfIdx++;
+        if (limit > 0 && (i + ctfIdx) > limit) {
+          console.log(`Reached limit ${limit}, stopping.`);
+          break;
+        }
+        console.log(`[CTF ${ctfIdx}/${ctfByCondition.size}] ${conditionId.substring(0, 20)}...`);
+        console.log(`    title:     ${agg.title.substring(0, 70)}`);
+        console.log(`    value:     $${agg.totalValue.toFixed(4)}`);
+        console.log(`    cashPnl:   $${agg.cashPnl.toFixed(4)}`);
+
+        if (opts.dryRun) {
+          console.log(`    DRY RUN — not submitting tx`);
+          console.log();
+          continue;
+        }
+
+        try {
+          const result = await redeemer.redeemCtf(conditionId as `0x${string}`);
+          if (result.success) {
+            ctfSuccesses++;
+            ctfClaimedMicro += result.usdcClaimed;
+            console.log(`    OK tx=${result.txHash}`);
+            console.log(`    claimed=${(Number(result.usdcClaimed) / 1e6).toFixed(4)} USDC`);
+          } else {
+            ctfFailures++;
+            console.log(`    FAIL: ${result.error}`);
+          }
+        } catch (err) {
+          ctfFailures++;
+          console.log(`    THREW: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        console.log();
+      }
+
+      console.log(`=== CTF Summary ===`);
+      console.log(`Successes:      ${ctfSuccesses}`);
+      console.log(`Failures:       ${ctfFailures}`);
+      console.log(`USDC claimed:   $${(Number(ctfClaimedMicro) / 1e6).toFixed(4)}`);
+      console.log();
+
+      successes += ctfSuccesses;
+      failures += ctfFailures;
+      totalClaimedMicro += ctfClaimedMicro;
+    }
+
+    console.log(`=== TOTAL ===`);
     console.log(`Successes:      ${successes}`);
     console.log(`Failures:       ${failures}`);
     console.log(`USDC claimed:   $${(Number(totalClaimedMicro) / 1e6).toFixed(4)}`);

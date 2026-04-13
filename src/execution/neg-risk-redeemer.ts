@@ -33,6 +33,10 @@ const NEG_RISK_ABI = parseAbi([
 const CTF_ABI = parseAbi([
   'function balanceOf(address account, uint256 id) view returns (uint256)',
   'function isApprovedForAll(address owner, address operator) view returns (bool)',
+  // Standard CTF redemption (non-negRisk markets). Burns ALL held tokens
+  // for the specified condition and pays out USDC for winning outcomes.
+  // indexSets [1, 2] = redeem both YES and NO outcomes.
+  'function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)',
 ]);
 
 const USDC_ABI = parseAbi([
@@ -148,6 +152,98 @@ export class NegRiskRedeemer {
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         log.warn({ rpc: rpcUrl, err: lastError }, 'RPC attempt failed, falling through');
+      }
+    }
+
+    return {
+      success: false,
+      usdcBefore: 0n,
+      usdcAfter: 0n,
+      usdcClaimed: 0n,
+      error: lastError ?? 'all RPC endpoints failed',
+    };
+  }
+
+  /**
+   * Redeem a standard (non-negRisk) CTF market's positions. Calls
+   * `CTF.redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)`
+   * which burns ALL held tokens for the condition and pays out USDC for
+   * winning outcomes.
+   *
+   * Key differences from negRisk redeem:
+   *   - Called on the CTF contract directly, not through the NegRiskAdapter
+   *   - No amounts array — burns entire balance automatically
+   *   - indexSets [1, 2] = redeem both YES (index 1) and NO (index 2) outcomes
+   *   - parentCollectionId is always bytes32(0) for top-level conditions
+   */
+  async redeemCtf(conditionId: Hex): Promise<RedemptionResult> {
+    const account = privateKeyToAccount(this.privateKey);
+    let lastError: string | undefined;
+    const PARENT_COLLECTION_ID = '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex;
+    const INDEX_SETS = [1n, 2n]; // Redeem both outcomes
+
+    for (const rpcUrl of this.rpcUrls) {
+      try {
+        const publicClient = createPublicClient({ chain: polygon, transport: http(rpcUrl) });
+        const walletClient = createWalletClient({ account, chain: polygon, transport: http(rpcUrl) });
+
+        const usdcBefore = await publicClient.readContract({
+          address: USDC_ADDRESS,
+          abi: USDC_ABI,
+          functionName: 'balanceOf',
+          args: [account.address],
+        });
+
+        log.info(
+          {
+            conditionId: conditionId.substring(0, 20) + '...',
+            wallet: account.address,
+            rpc: rpcUrl,
+          },
+          'Submitting CTF redeemPositions tx',
+        );
+
+        const txHash = await walletClient.writeContract({
+          address: CTF_ADDRESS,
+          abi: CTF_ABI,
+          functionName: 'redeemPositions',
+          args: [USDC_ADDRESS, PARENT_COLLECTION_ID, conditionId, INDEX_SETS],
+        });
+
+        const receipt = await publicClient.waitForTransactionReceipt({
+          hash: txHash,
+          timeout: 120_000,
+        });
+
+        if (receipt.status !== 'success') {
+          lastError = `tx ${txHash} reverted`;
+          log.warn({ txHash, conditionId: conditionId.substring(0, 20) + '...' }, 'CTF redeemPositions reverted');
+          continue;
+        }
+
+        const usdcAfter = await publicClient.readContract({
+          address: USDC_ADDRESS,
+          abi: USDC_ABI,
+          functionName: 'balanceOf',
+          args: [account.address],
+        });
+
+        const usdcClaimed = usdcAfter - usdcBefore;
+
+        log.info(
+          {
+            conditionId: conditionId.substring(0, 20) + '...',
+            txHash,
+            usdcClaimed: usdcClaimed.toString(),
+            blockNumber: receipt.blockNumber.toString(),
+          },
+          'CTF redemption successful',
+        );
+
+        return { success: true, txHash, usdcBefore, usdcAfter, usdcClaimed };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        log.warn({ rpc: rpcUrl, err: lastError }, 'CTF RPC attempt failed, falling through');
       }
     }
 
