@@ -163,12 +163,21 @@ async function load() {
             var diffH = Math.round((d - now) / 3600000);
             var uma = (mkt.uma_resolution_status || '').toLowerCase();
             if (diffH < 0) {
-              if (uma && uma !== 'resolved' && uma !== 'settled') {
-                endDate = '<span style="color:#a78bfa" title="UMA oracle working: ' + mkt.uma_resolution_status + '">UMA Pending</span>';
-              } else if (uma === 'resolved' || uma === 'settled') {
-                endDate = '<span style="color:#9ca3af" title="Resolved, awaiting reconciler">Resolved</span>';
+              var hoursOverdue = Math.abs(diffH);
+              if (uma === 'resolved' || uma === 'settled') {
+                endDate = '<span style="color:#10b981" title="Resolved on-chain, reconciler will close">&#10003; Resolved</span>';
+              } else if (uma && uma !== 'resolved' && uma !== 'settled') {
+                endDate = '<span style="color:#a78bfa" title="UMA oracle working: ' + mkt.uma_resolution_status + '">&#9881; UMA Pending</span>';
+              } else if (hoursOverdue < 48) {
+                // Normal: markets routinely take 24-48h after end_date to resolve via UMA oracle.
+                // This is NOT overdue — it's the standard resolution window.
+                endDate = '<span style="color:#f6ad55" title="Event ended ' + hoursOverdue + 'h ago, awaiting oracle resolution (normal 24-48h window)">&#9203; Settling (' + hoursOverdue + 'h)</span>';
+              } else if (hoursOverdue < 168) {
+                // 2-7 days past: getting slow but still within range for complex markets (elections, etc.)
+                endDate = '<span style="color:#fb923c" title="Event ended ' + Math.round(hoursOverdue/24) + 'd ago, resolution delayed">&#9888; Slow (' + Math.round(hoursOverdue/24) + 'd)</span>';
               } else {
-                endDate = '<span style="color:#ef4444" title="Past end_date, UMA has not started">Overdue</span>';
+                // 7+ days: genuinely overdue, may need manual investigation
+                endDate = '<span style="color:#ef4444" title="Event ended ' + Math.round(hoursOverdue/24) + 'd ago — investigate">&#10060; Overdue (' + Math.round(hoursOverdue/24) + 'd)</span>';
               }
             }
             else if (diffH < 24) endDate = '<span style="color:#f6ad55">' + diffH + 'h</span>';
