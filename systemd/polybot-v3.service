@@ -25,9 +25,14 @@ StartLimitIntervalSec=300
 #   (wallet creds live in /opt/polybot-v3/state/api_keys.json, not .env)
 EnvironmentFile=/opt/polybot-v3/.env
 
-# Security hardening
+# Security hardening — R1 PR#3 (2026-04-14)
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ReadWritePaths=/opt/polybot-v3/data /opt/polybot-v3/backups /opt/polybot-v3/.env
+ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3/config /opt/polybot-v3/node_modules
 
 # Resource limits
 LimitNOFILE=65536

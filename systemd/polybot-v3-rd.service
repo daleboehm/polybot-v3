@@ -36,8 +36,15 @@ Environment=ENTITIES_PATH=/opt/polybot-v3-rd/config/rd-entities.yaml
 # (see EnvironmentFile directive above). NEVER hardcoded here — the repo is
 # shared on GitHub and secrets must not be committed.
 
+# Security hardening — R1 PR#3 (2026-04-14)
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ReadWritePaths=/opt/polybot-v3-rd/data /opt/polybot-v3-rd/.env
+ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3-rd/config /opt/polybot-v3/node_modules
+
 LimitNOFILE=65536
 MemoryMax=512M
 
