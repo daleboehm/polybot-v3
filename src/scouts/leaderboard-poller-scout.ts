@@ -35,7 +35,8 @@ import { ScoutBase, type ScoutRunResult } from './scout-base.js';
 import { upsertCandidate, expireStaleCandidates } from '../storage/repositories/smart-money-repo.js';
 import { createChildLogger } from '../core/logger.js';
 
-const LEADERBOARD_URL = 'https://data-api.polymarket.com/leaderboards?window=week';
+// 2026-04-13: corrected from /leaderboards (404) to /v1/leaderboard.
+const LEADERBOARD_URL = 'https://data-api.polymarket.com/v1/leaderboard?limit=50';
 const MIN_POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 min — avoid hammering
 
 export interface LeaderboardEntry {
