@@ -39,11 +39,9 @@ Environment=ENTITIES_PATH=/opt/polybot-v3-rd/config/rd-entities.yaml
 # Security hardening — R1 PR#3 (2026-04-14)
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
 PrivateDevices=true
-ReadWritePaths=/opt/polybot-v3-rd/data
-ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3-rd/config /opt/polybot-v3/node_modules /opt/polybot-v3-rd/.env /opt/polybot-v3-rd/state /opt/polybot-v3-rd/node_modules
 
 LimitNOFILE=65536
 MemoryMax=512M

@@ -28,11 +28,9 @@ EnvironmentFile=/opt/polybot-v3/.env
 # Security hardening — R1 PR#3 (2026-04-14)
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
 PrivateDevices=true
-ReadWritePaths=/opt/polybot-v3/data /opt/polybot-v3/backups
-ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3/config /opt/polybot-v3/node_modules /opt/polybot-v3/.env /opt/polybot-v3/state
 
 # Resource limits
 LimitNOFILE=65536
