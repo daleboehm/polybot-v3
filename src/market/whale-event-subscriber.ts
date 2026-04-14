@@ -82,7 +82,10 @@ export interface WhaleEventSubscriberConfig {
 
 export const DEFAULT_WHALE_SUBSCRIBER_CONFIG: WhaleEventSubscriberConfig = {
   poll_interval_ms: 60_000,
-  max_blocks_per_poll: 1000,
+  // Polygon ~2s blocks → 30 blocks/min. At 60s poll interval we need
+  // ~30 blocks to stay current. Alchemy free tier caps at 10-block
+  // range per getLogs call, so we chunk the scan into sub-ranges.
+  max_blocks_per_poll: 100,
 };
 
 /**
@@ -194,35 +197,45 @@ export class WhaleEventSubscriber {
         return;
       }
 
-      // Fetch OrderFilled events from both exchanges. We don't filter
-      // at the RPC level because viem's getLogs doesn't support
-      // "topic IN (a, b)" — instead we fetch all OrderFilled events in
-      // the block range from both contract addresses, then filter
-      // client-side for whale involvement.
+      // Fetch OrderFilled events from both exchanges. We chunk into
+      // sub-ranges of CHUNK_SIZE blocks to stay within Alchemy free
+      // tier's 10-block getLogs limit. Other RPCs have similar limits.
+      const CHUNK_SIZE = 8n; // conservative — Alchemy free caps at 10
       const logs: Log[] = [];
+      let chunkFailed = false;
       for (const contract of [CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE]) {
-        try {
-          const contractLogs = await client.getLogs({
-            address: contract,
-            event: ORDER_FILLED_EVENT,
-            fromBlock,
-            toBlock,
-          });
-          logs.push(...contractLogs);
-        } catch (err) {
-          log.warn(
-            {
-              contract,
-              fromBlock: fromBlock.toString(),
-              toBlock: toBlock.toString(),
-              err: err instanceof Error ? err.message : String(err),
-            },
-            'getLogs failed — rotating RPC',
-          );
-          this.rotateRpc();
-          // Don't advance lastScannedBlock; retry the same range on next poll
-          return;
+        let chunkFrom = fromBlock;
+        while (chunkFrom <= toBlock) {
+          const chunkTo = chunkFrom + CHUNK_SIZE > toBlock ? toBlock : chunkFrom + CHUNK_SIZE;
+          try {
+            const contractLogs = await client.getLogs({
+              address: contract,
+              event: ORDER_FILLED_EVENT,
+              fromBlock: chunkFrom,
+              toBlock: chunkTo,
+            });
+            logs.push(...contractLogs);
+          } catch (err) {
+            log.warn(
+              {
+                contract,
+                fromBlock: chunkFrom.toString(),
+                toBlock: chunkTo.toString(),
+                err: err instanceof Error ? err.message : String(err),
+              },
+              'getLogs chunk failed — rotating RPC',
+            );
+            this.rotateRpc();
+            chunkFailed = true;
+            break;
+          }
+          chunkFrom = chunkTo + 1n;
         }
+        if (chunkFailed) break;
+      }
+      if (chunkFailed) {
+        // Don't advance lastScannedBlock; retry the same range on next poll
+        return;
       }
 
       let matched = 0;
