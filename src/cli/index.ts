@@ -945,6 +945,324 @@ program
     process.exit(failed > 0 ? 1 : 0);
   });
 
+// ─── WHALE-CONSENSUS ────────────────────────────────────────
+// Scan current positions of all whitelisted whales, find markets where
+// N+ whales hold the same side, and optionally generate entry signals
+// that flow through the normal risk/execution pipeline.
+//
+// Usage:
+//   polybot whale-consensus --entity polybot --min-whales 3 --dry-run
+//   polybot whale-consensus --entity polybot --min-whales 4 --execute
+program
+  .command('whale-consensus')
+  .description('Find markets where multiple whales hold the same side and optionally enter them')
+  .requiredOption('--entity <slug>', 'Entity slug to trade on')
+  .option('--min-whales <n>', 'Minimum whales on same side to consider (default: 3)', '3')
+  .option('--min-wr <n>', 'Minimum avg WR of agreeing whales (default: 0.75)', '0.75')
+  .option('--max-entries <n>', 'Max new positions to open (default: 5)', '5')
+  .option('--size-usd <n>', 'USD size per position (default: 5)', '5')
+  .option('--execute', 'Actually place orders (default: dry-run)', false)
+  .option('--dry-run', 'Show consensus without placing orders (default)', false)
+  .action(async (opts) => {
+    const config = loadConfig();
+    const db = initDatabase(config.database.path);
+    applySchema(db);
+
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) {
+      console.error(`Entity ${opts.entity} not found`);
+      process.exit(1);
+    }
+
+    const minWhales = Number(opts.minWhales) || 3;
+    const minWr = Number(opts.minWr) || 0.75;
+    const maxEntries = Number(opts.maxEntries) || 5;
+    const sizeUsd = Number(opts.sizeUsd) || 5;
+    const execute = opts.execute === true;
+
+    // Load whales and their stats
+    const { listActiveWhales } = await import('../storage/repositories/smart-money-repo.js');
+    const whales = listActiveWhales();
+    if (whales.length === 0) {
+      console.log('No active whales in whitelist.');
+      process.exit(0);
+    }
+
+    // Get whale stats from candidates table
+    type CandidateRow = { proxy_wallet: string; win_rate: number; all_time_pnl_usd: number };
+    const candidateStats = new Map<string, CandidateRow>();
+    const candidates = db.prepare(
+      'SELECT proxy_wallet, win_rate, all_time_pnl_usd FROM smart_money_candidates'
+    ).all() as CandidateRow[];
+    for (const c of candidates) {
+      candidateStats.set(c.proxy_wallet, c);
+    }
+
+    console.log(`\n=== Whale Consensus Scanner ===`);
+    console.log(`Whales:      ${whales.length}`);
+    console.log(`Min whales:  ${minWhales}`);
+    console.log(`Min avg WR:  ${(minWr * 100).toFixed(0)}%`);
+    console.log(`Max entries: ${maxEntries}`);
+    console.log(`Size/pos:    $${sizeUsd}`);
+    console.log(`Mode:        ${execute ? 'EXECUTE' : 'DRY RUN'}`);
+    console.log();
+
+    // Fetch positions for each whale from Data API
+    const { DataApiClient } = await import('../market/data-api-client.js');
+    const dataApi = new DataApiClient(config.api.data_api_base_url);
+
+    interface WhalePos {
+      wallet: string;
+      pseudonym: string | null;
+      wr: number;
+      pnl: number;
+      multiplier: number;
+      side: string;
+      size: number;
+      avgPrice: number;
+    }
+
+    const marketMap = new Map<string, {
+      question: string;
+      slug: string;
+      positions: WhalePos[];
+    }>();
+
+    let errors = 0;
+    for (let i = 0; i < whales.length; i++) {
+      const w = whales[i]!;
+      const label = (w.pseudonym || w.proxy_wallet.substring(0, 14)).substring(0, 20);
+      const stats = candidateStats.get(w.proxy_wallet);
+      try {
+        const allPos = await dataApi.getAllPositions(w.proxy_wallet);
+        const active = allPos.filter(p => Math.abs(Number(p.size) || 0) > 0.1);
+        console.log(`  [${i + 1}/${whales.length}] ${label.padEnd(20)} ${active.length} positions`);
+
+        for (const p of active) {
+          const cond = p.conditionId || '';
+          if (!cond) continue;
+          const size = Number(p.size) || 0;
+          const avg = Number(p.avgPrice) || 0;
+          const outcome = (p.outcome || 'Yes').toString().toUpperCase();
+          const side = outcome === 'NO' ? 'NO' : 'YES';
+
+          if (!marketMap.has(cond)) {
+            marketMap.set(cond, {
+              question: (p.title || '').substring(0, 80),
+              slug: (p.slug || '').substring(0, 60),
+              positions: [],
+            });
+          }
+          marketMap.get(cond)!.positions.push({
+            wallet: w.proxy_wallet,
+            pseudonym: w.pseudonym,
+            wr: stats?.win_rate ?? 0,
+            pnl: stats?.all_time_pnl_usd ?? 0,
+            multiplier: w.copy_multiplier,
+            side,
+            size,
+            avgPrice: avg,
+          });
+        }
+
+        // Rate limit
+        await new Promise(r => setTimeout(r, 300));
+      } catch (err) {
+        errors++;
+        if (errors < 5) console.log(`  ERROR: ${label}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Find consensus markets
+    interface ConsensusMarket {
+      conditionId: string;
+      question: string;
+      side: 'YES' | 'NO';
+      whaleCount: number;
+      avgWr: number;
+      totalSizeUsd: number;
+      avgMultiplier: number;
+      whales: WhalePos[];
+    }
+
+    const consensusMarkets: ConsensusMarket[] = [];
+
+    for (const [condId, market] of marketMap.entries()) {
+      const yesWhales = market.positions.filter(p => p.side === 'YES');
+      const noWhales = market.positions.filter(p => p.side === 'NO');
+
+      // Check YES side consensus
+      if (yesWhales.length >= minWhales) {
+        const avgWr = yesWhales.reduce((s, w) => s + w.wr, 0) / yesWhales.length;
+        if (avgWr >= minWr) {
+          consensusMarkets.push({
+            conditionId: condId,
+            question: market.question,
+            side: 'YES',
+            whaleCount: yesWhales.length,
+            avgWr,
+            totalSizeUsd: yesWhales.reduce((s, w) => s + w.size * w.avgPrice, 0),
+            avgMultiplier: yesWhales.reduce((s, w) => s + w.multiplier, 0) / yesWhales.length,
+            whales: yesWhales,
+          });
+        }
+      }
+
+      // Check NO side consensus
+      if (noWhales.length >= minWhales) {
+        const avgWr = noWhales.reduce((s, w) => s + w.wr, 0) / noWhales.length;
+        if (avgWr >= minWr) {
+          consensusMarkets.push({
+            conditionId: condId,
+            question: market.question,
+            side: 'NO',
+            whaleCount: noWhales.length,
+            avgWr,
+            totalSizeUsd: noWhales.reduce((s, w) => s + w.size * w.avgPrice, 0),
+            avgMultiplier: noWhales.reduce((s, w) => s + w.multiplier, 0) / noWhales.length,
+            whales: noWhales,
+          });
+        }
+      }
+    }
+
+    // Sort by whale count desc, then by avg WR desc
+    consensusMarkets.sort((a, b) => b.whaleCount - a.whaleCount || b.avgWr - a.avgWr);
+
+    // Check which markets we already hold
+    type OpenPos = { condition_id: string };
+    const existingPositions = new Set(
+      (db.prepare(
+        'SELECT condition_id FROM positions WHERE entity_slug = ? AND status = ?'
+      ).all(opts.entity, 'open') as OpenPos[]).map(p => p.condition_id)
+    );
+
+    console.log(`\n${'='.repeat(100)}`);
+    console.log(`WHALE CONSENSUS — ${consensusMarkets.length} markets with ${minWhales}+ whales (avg WR >= ${(minWr * 100).toFixed(0)}%)`);
+    console.log(`${'='.repeat(100)}`);
+
+    const actionable: ConsensusMarket[] = [];
+
+    for (let i = 0; i < consensusMarkets.length; i++) {
+      const m = consensusMarkets[i]!;
+      const held = existingPositions.has(m.conditionId);
+      const tag = held ? ' [ALREADY HELD]' : '';
+      console.log(`\n${(i + 1).toString().padStart(3)}. ${m.side} | ${m.whaleCount} whales | avgWR=${(m.avgWr * 100).toFixed(0)}% | $${m.totalSizeUsd.toFixed(0)} exposure${tag}`);
+      console.log(`     ${m.question}`);
+      for (const w of m.whales) {
+        const nm = (w.pseudonym || w.wallet.substring(0, 14)).substring(0, 16);
+        console.log(`       ${nm.padEnd(16)} ${w.side.padEnd(3)} ${w.size.toFixed(0).padStart(8)}sh @${w.avgPrice.toFixed(2)} WR=${(w.wr * 100).toFixed(0)}% mult=${w.multiplier}`);
+      }
+
+      if (!held && actionable.length < maxEntries) {
+        actionable.push(m);
+      }
+    }
+
+    console.log(`\n${'='.repeat(100)}`);
+    console.log(`ACTIONABLE: ${actionable.length} new positions (not already held)`);
+    console.log(`${'='.repeat(100)}`);
+
+    if (actionable.length === 0) {
+      console.log('No new consensus positions to enter.');
+      closeDatabase();
+      process.exit(0);
+    }
+
+    for (const m of actionable) {
+      console.log(`  ${m.side} | ${m.whaleCount} whales | ${m.question.substring(0, 60)}`);
+    }
+
+    if (!execute) {
+      console.log(`\nDRY RUN — not placing orders. Use --execute to trade.`);
+      closeDatabase();
+      process.exit(0);
+    }
+
+    // Execute: place orders via CLOB client
+    console.log(`\nPlacing ${actionable.length} orders...`);
+
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key || !creds.api_key) {
+      console.error(`No wallet credentials for ${opts.entity}`);
+      process.exit(1);
+    }
+
+    const mod = await import('@polymarket/clob-client');
+    const { ClobClient } = mod;
+    const { createWalletClient: cwc, http: httpTransport } = await import('viem');
+    const { polygon: poly } = await import('viem/chains');
+    const { privateKeyToAccount: pka } = await import('viem/accounts');
+    const { getPrimaryRpc } = await import('../market/rpc-config.js');
+
+    const pkHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const acc = pka(pkHex);
+    const wc = cwc({ account: acc, chain: poly, transport: httpTransport(getPrimaryRpc()) });
+    const clobClient = new ClobClient(
+      config.api.clob_base_url,
+      137,
+      wc,
+      { key: creds.api_key, secret: creds.api_secret, passphrase: creds.api_passphrase },
+    );
+
+    let placed = 0;
+    let failed = 0;
+
+    for (const m of actionable) {
+      try {
+        // Look up market in our cache to get token_id
+        type MktRow = { token_yes_id: string; token_no_id: string; yes_price: number; no_price: number };
+        const mkt = db.prepare(
+          'SELECT token_yes_id, token_no_id, yes_price, no_price FROM markets WHERE condition_id = ?'
+        ).get(m.conditionId) as MktRow | undefined;
+
+        if (!mkt) {
+          console.log(`  SKIP ${m.conditionId.substring(0, 14)}: not in market cache`);
+          failed++;
+          continue;
+        }
+
+        const tokenId = m.side === 'YES' ? mkt.token_yes_id : mkt.token_no_id;
+        const price = m.side === 'YES' ? mkt.yes_price : mkt.no_price;
+
+        if (!tokenId || !price || price <= 0 || price >= 1) {
+          console.log(`  SKIP ${m.conditionId.substring(0, 14)}: invalid price ${price}`);
+          failed++;
+          continue;
+        }
+
+        const sizeShares = Math.max(5, Math.round(sizeUsd / price));
+
+        const userOrder = {
+          tokenID: tokenId,
+          price: Math.round(price * 100) / 100, // round to tick
+          size: sizeShares,
+          side: mod.Side.BUY,
+        };
+
+        console.log(`  BUY ${m.side} ${sizeShares}sh @${price.toFixed(2)} | ${m.question.substring(0, 50)}`);
+        const signedOrder = await clobClient.createOrder(userOrder);
+        const response = await clobClient.postOrder(signedOrder);
+        console.log(`    OK: ${JSON.stringify(response).substring(0, 150)}`);
+        placed++;
+      } catch (err) {
+        console.log(`    FAIL: ${err instanceof Error ? err.message : String(err)}`);
+        failed++;
+      }
+    }
+
+    console.log(`\n=== Consensus Entry Summary ===`);
+    console.log(`Placed:  ${placed}`);
+    console.log(`Failed:  ${failed}`);
+    console.log();
+
+    closeDatabase();
+    process.exit(failed > 0 ? 1 : 0);
+  });
+
 // ─── REPORT ─────────────────────────────────────────────────
 program
   .command('report')
