@@ -42,8 +42,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateDevices=true
-ReadWritePaths=/opt/polybot-v3-rd/data /opt/polybot-v3-rd/.env
-ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3-rd/config /opt/polybot-v3/node_modules
+ReadWritePaths=/opt/polybot-v3-rd/data
+ReadOnlyPaths=/opt/polybot-v3/dist /opt/polybot-v3-rd/config /opt/polybot-v3/node_modules /opt/polybot-v3-rd/.env /opt/polybot-v3-rd/state /opt/polybot-v3-rd/node_modules
 
 LimitNOFILE=65536
 MemoryMax=512M
