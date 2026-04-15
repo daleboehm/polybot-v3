@@ -1,18 +1,48 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-14** (R1-R3c rebuild verified complete, whale tracking live)
+**Updated: 2026-04-14** (PROD HALTED 2026-04-13, R&D live, R1-R3c rebuild complete)
 
 ## Start-of-session checklist for any Claude
 
 1. Read `docs/status.md` for current state
 2. Read `docs/context.md` for architecture
-3. Check memory: `polybot_v3_state.md` + `polybot_v3_rebuild_complete.md`
+3. Check memory: `polybot_v3_state.md` + `polybot_v3_prod_halted.md` + `polybot_v3_rebuild_complete.md`
 4. **DO NOT** start "rebuild" work on R1/R2/R3 items without verifying status first — those are done
-5. Check both engines are healthy: `ssh ... "curl -s http://localhost:9100/api/health"` and `http://localhost:9200/rd/api/health`
+5. **DO NOT** `systemctl restart polybot-v3` as a "fresh start" — kill switch is not persisted, restart auto-resumes live trading into the broken longshot strategy. Use SIGUSR2 for deliberate release, and only after the recap-day gate list below is cleared.
+6. Check both engines are healthy: `ssh ... "curl -s http://localhost:9100/api/health"` and `http://localhost:9200/rd/api/health`
 
-## Next actionable work (prioritized)
+## Recap-day gate list (BLOCKING any live redeploy)
 
-### 1. Consensus-driven entries (READY TO EXECUTE — awaiting Dale's go)
+Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. When fresh USDC arrives, the following must be cleared IN ORDER before SIGUSR2 release. Nothing in "Next actionable work" below runs live until this list is green.
+
+### G1. Fix weather_forecast kill-switch bypass
+Evidence: trades 1347 + 1348 placed AFTER the 4/13 halt via `weather_forecast` strategy path. Combined exposure only $0.49 but the defect is real — `src/execution/clob-router.ts` order path for weather_forecast isn't checking `killSwitch.isHalted()` before submission. Audit ALL strategy → order-router paths for kill-switch checks; the halt primitive is only as good as its weakest caller.
+
+### G2. Add portfolio-wide exposure cap (NEW 2026-04-14)
+**Gap:** Current risk stack caps per-position (`max_position_pct: 0.10`, `max_position_usd: 20`) but has NO aggregate exposure cap. On 4/13, the longshot cluster opened ~8 correlated positions that each passed the per-position gate but collectively reached ~60% of equity. A portfolio-level cap would have blocked the 4th+ orders and contained the blow-up before the 20% drawdown kill switch tripped.
+
+**Proposed:** `max_portfolio_exposure_pct: 0.15` in `src/config/schema.ts`, enforced in `src/risk/risk-engine.ts` as a new pre-trade check that sums `open_positions.cost_basis` for the entity and rejects if adding the new order would exceed the cap. Reference: stacyonchain postmortem (2026-04-14 research) — same cap value he uses on a 3-strategy portfolio.
+
+**Interaction with kill switch:** Additive, not replacement. Kill switch catches *drawdown* after the fact; portfolio cap catches *concentration* before the fact. Both needed.
+
+### G3. Disable longshot on live until R&D proves it post-divergence
+Paper-to-live divergence is the root cause of the 4/13 blow-up (R&D on identical code is flat, prod dropped 80%). Do NOT re-enable longshot on prod until R&D shows Wilson LB ≥ 0.50 on n ≥ 50 **live-matched** trades (not paper). Quarantine like value/skew/complement were, or flag-gate it with `LONGSHOT_LIVE_ENABLED=false`.
+
+### G4. Verify auto-claim flow end-to-end
+stacyonchain research flagged auto-claim as "not optional" — unclaimed resolved positions are dead capital. `src/execution/neg-risk-redeemer.ts` exists but behavior under UMA `proposed` state needs verification. Position 1629 (White House posts 180-199, NO 0.991, currently `proposed`) is the natural test case — watch it through resolution and confirm the redeemer fires.
+
+### G5. Right-size caps for new capital level
+$20 abs cap is correct for $257 seed but too tight for $1K+:
+- At $1K seed → `max_position_usd: 100`, `max_position_pct: 0.08` (tighter than 0.10 per stacyonchain)
+- At $2K seed → `max_position_usd: 200`, `max_position_pct: 0.08`
+- At $5K+ → revisit; Kelly math changes at that scale
+
+### G6. SIGUSR2 release (NOT systemctl restart)
+Only after G1-G5 are green. `kill -USR2 $(systemctl show polybot-v3 -p MainPID --value)`. Restart would auto-resume live trading immediately because the kill switch is not persisted.
+
+## Next actionable work (prioritized — ALL GATED on recap-day list above)
+
+### 1. Consensus-driven entries (READY once recap-day gates clear)
 
 The `polybot whale-consensus` CLI is deployed and dry-run tested. 10 markets with 4-9 high-WR whales agreeing. Command to execute:
 
