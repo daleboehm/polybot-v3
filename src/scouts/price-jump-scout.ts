@@ -25,13 +25,18 @@ interface PriceSnapshot {
 }
 
 const WINDOW_MS = 5 * 60 * 1000;
-const JUMP_PCT = 0.05;              // 5% mid-price move within window
+// 2026-04-15: lowered 0.05 → 0.03 after scout-coordinator observability
+// fix confirmed priority_table was empty — 5% in 5min was too strict for
+// the mid-market population we actually track. 3% is still a meaningful
+// move (a typical 5¢-spread binary trades through ~1% noise) and gets
+// the attention-routing path firing without dominating the PriorityScanner.
+const JUMP_PCT = 0.03;              // 3% mid-price move within window
 const TTL_MS = 10 * 60 * 1000;      // 10 min
 const MIN_LIQUIDITY = 1_000;        // avoid thin/illiquid markets
 
 export class PriceJumpScout extends ScoutBase {
   readonly id = 'price-jump-scout';
-  readonly description = 'Flags markets whose mid-price moved >=5% in <=5 min';
+  readonly description = 'Flags markets whose mid-price moved >=3% in <=5 min';
 
   private history = new Map<string, PriceSnapshot[]>();
 

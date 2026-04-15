@@ -43,11 +43,18 @@ export const DEFAULT_SCOUT_COORDINATOR_CONFIG: ScoutCoordinatorConfig = {
   disabled_scouts: [],
 };
 
+// 2026-04-15: log a periodic tick summary every N ticks even when totals are
+// zero. Without this, all-zero ticks produce no log evidence and a silent
+// scout fleet looks identical to a healthy one (this is exactly the trap that
+// hid the scout_intel empty-table bug until we queried SQLite directly).
+const PERIODIC_SUMMARY_EVERY_N_TICKS = 10;
+
 export class ScoutCoordinator {
   private scouts: ScoutBase[] = [];
   private interval: NodeJS.Timeout | null = null;
   private running = false;
   private tickCount = 0;
+  private lastSummaryAtTick = 0;
 
   constructor(private config: ScoutCoordinatorConfig = DEFAULT_SCOUT_COORDINATOR_CONFIG) {
     this.registerDefaultScouts();
@@ -127,18 +134,27 @@ export class ScoutCoordinator {
 
       const totalPri = results.reduce((s, r) => s + r.priorities_written, 0);
       const totalInt = results.reduce((s, r) => s + r.intel_written, 0);
-      if (totalPri > 0 || totalInt > 0) {
+      const totalEval = results.reduce((s, r) => s + r.markets_evaluated, 0);
+      const nonZeroTick = totalPri > 0 || totalInt > 0;
+      const periodicTick =
+        this.tickCount - this.lastSummaryAtTick >= PERIODIC_SUMMARY_EVERY_N_TICKS;
+      if (nonZeroTick || periodicTick) {
         log.info(
           {
             tick: this.tickCount,
+            evaluated: totalEval,
             priorities: totalPri,
             intel: totalInt,
-            per_scout: results
-              .filter(r => r.priorities_written > 0 || r.intel_written > 0)
-              .map(r => `${r.scout_id}:${r.priorities_written}p/${r.intel_written}i`),
+            // Full per-scout breakdown so zero-tick ticks still show which
+            // scouts are even looking at markets. Format: id:Mm/Pp/Ii.
+            per_scout: results.map(
+              r =>
+                `${r.scout_id}:${r.markets_evaluated}m/${r.priorities_written}p/${r.intel_written}i`,
+            ),
           },
-          'Scout tick complete',
+          nonZeroTick ? 'Scout tick complete' : 'Scout tick summary (periodic, zero activity)',
         );
+        this.lastSummaryAtTick = this.tickCount;
       }
     } finally {
       this.running = false;
