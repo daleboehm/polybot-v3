@@ -599,6 +599,65 @@ LEFT JOIN (
     GROUP BY strategy_id, COALESCE(sub_strategy_id, ''), entity_slug
 ) p ON s.strategy_id = p.strategy_id AND s.sub_strategy_id = p.sub_strategy_id AND s.entity_slug = p.entity_slug
 ORDER BY COALESCE(s.total_trades, 0) DESC;
+
+-- 2026-04-15: rolling-window strategy performance.
+-- The v_strategy_performance view above is ALL-TIME. That's useful for
+-- lifetime accounting but dangerous for decision-making because a single
+-- bad burn-in day (e.g. 2026-04-11 longshot sports-fade blowup) contaminates
+-- the average forever. The rolling view exposes 24h / 48h / 72h windows
+-- per strategy and per sub-strategy so the dashboard and the advisor can
+-- show Dale the recent behavior alongside the lifetime picture.
+--
+-- Each row is a (strategy_id, sub_strategy_id, entity_slug, window_label)
+-- tuple. window_label is one of '24h', '48h', '72h', 'all_time'. The
+-- cutoff is applied at view-query time via datetime('now','-N hours'),
+-- which SQLite resolves on every SELECT, so the window always tracks
+-- "right now" without any background job needing to refresh it.
+--
+-- Pushes (realized_pnl = 0) are counted in n but not in wins/losses, to
+-- match v_strategy_performance's win-rate convention (wins / (wins+losses)).
+-- avg_pnl_per_trade is over all n (including pushes) so that when Dale
+-- sees "per_trade = +$0.14" it is the real rate of capital gain, not a
+-- push-excluded artifact.
+CREATE VIEW IF NOT EXISTS v_strategy_rolling AS
+WITH windows AS (
+    SELECT '24h' AS window_label, datetime('now','-24 hours') AS cutoff
+    UNION ALL SELECT '48h', datetime('now','-48 hours')
+    UNION ALL SELECT '72h', datetime('now','-72 hours')
+    UNION ALL SELECT 'all_time', '1970-01-01 00:00:00'
+)
+SELECT
+    r.strategy_id,
+    COALESCE(r.sub_strategy_id, '') AS sub_strategy_id,
+    r.entity_slug,
+    w.window_label,
+    COUNT(*) AS n,
+    SUM(CASE WHEN r.realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN r.realized_pnl < 0 THEN 1 ELSE 0 END) AS losses,
+    SUM(CASE WHEN r.realized_pnl = 0 THEN 1 ELSE 0 END) AS pushes,
+    CASE WHEN SUM(CASE WHEN r.realized_pnl > 0 THEN 1 ELSE 0 END)
+             + SUM(CASE WHEN r.realized_pnl < 0 THEN 1 ELSE 0 END) > 0
+         THEN ROUND(100.0 * SUM(CASE WHEN r.realized_pnl > 0 THEN 1 ELSE 0 END)
+                  / (SUM(CASE WHEN r.realized_pnl > 0 THEN 1 ELSE 0 END)
+                     + SUM(CASE WHEN r.realized_pnl < 0 THEN 1 ELSE 0 END)), 1)
+         ELSE 0.0 END AS win_rate,
+    ROUND(SUM(r.realized_pnl), 4) AS total_pnl,
+    ROUND(SUM(r.realized_pnl) * 1.0 / COUNT(*), 4) AS avg_pnl_per_trade,
+    ROUND(MAX(r.realized_pnl), 4) AS best_trade,
+    ROUND(MIN(r.realized_pnl), 4) AS worst_trade,
+    MIN(r.resolved_at) AS first_resolved_at,
+    MAX(r.resolved_at) AS last_resolved_at
+FROM resolutions r
+CROSS JOIN windows w
+WHERE r.strategy_id IS NOT NULL
+  AND r.resolved_at >= w.cutoff
+GROUP BY r.strategy_id, COALESCE(r.sub_strategy_id, ''), r.entity_slug, w.window_label
+ORDER BY r.strategy_id, sub_strategy_id, r.entity_slug,
+         CASE w.window_label
+              WHEN '24h' THEN 1
+              WHEN '48h' THEN 2
+              WHEN '72h' THEN 3
+              WHEN 'all_time' THEN 4 END;
 `;
 
 export function applySchema(db: Database.Database): void {
@@ -697,6 +756,23 @@ export function applySchema(db: Database.Database): void {
     }
   } catch (err) {
     log.warn({ err }, 'v_entity_pnl recreation failed');
+  }
+
+  // 2026-04-15: v_strategy_rolling — rolling 24h/48h/72h/all_time per strategy
+  // and per sub-strategy. Added after the dead-zone memo kill verdict showed
+  // all-time averages hide the fact that longshot had already self-corrected.
+  // See docs/longshot-0.83-dead-zone-2026-04-15.md for the full context.
+  try {
+    db.exec('DROP VIEW IF EXISTS v_strategy_rolling');
+    const rollingDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_rolling[\s\S]*?WHEN 'all_time' THEN 4 END;/);
+    if (rollingDdl) {
+      db.exec(rollingDdl[0]);
+      log.info('v_strategy_rolling view recreated');
+    } else {
+      log.warn('v_strategy_rolling DDL not found in schema source — view NOT created');
+    }
+  } catch (err) {
+    log.warn({ err }, 'v_strategy_rolling recreation failed');
   }
 
   // Record schema version
