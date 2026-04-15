@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3+G4b code landed & R&D-verified — prod still on old binary pending G4a backlog sweep + SIGUSR2 release)
+**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3+G4b code landed & R&D-verified — prod still on old binary pending G4a backlog sweep + SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed 2026-04-15 commit `3bc2de3`, verified against the 7 open prod positions via `--dry-run`.)
 
 ## Start-of-session checklist for any Claude
 
@@ -97,6 +97,21 @@ $20 abs cap is correct for $257 seed but too tight for $1K+:
 
 ### G6. SIGUSR2 release (NOT systemctl restart)
 Only after G1-G5 are green. `kill -USR2 $(systemctl show polybot-v3 -p MainPID --value)`. Restart would auto-resume live trading immediately because the kill switch is not persisted.
+
+### Prod exit hatch (decoupled from G1-G6)
+
+The `sell-position --all-open` CLI landed in commit `3bc2de3` bypasses `clob-router.routeOrder()` and therefore the kill switch — this is the intentional operator exit path when prod is halted. Dale can liquidate the 7 open prod positions ($22.99 total cost basis) at any time WITHOUT waiting for the G6 release:
+
+```bash
+# Verify first:
+ssh -i ~/.armorstack-vault/polymarket/armorstack_vps_key -p 2222 root@178.62.225.235 \
+  'cd /opt/polybot-v3 && node dist/cli/index.js sell-position --entity polybot --all-open --dry-run'
+# Execute (live money):
+ssh -i ~/.armorstack-vault/polymarket/armorstack_vps_key -p 2222 root@178.62.225.235 \
+  'cd /opt/polybot-v3 && node dist/cli/index.js sell-position --entity polybot --all-open'
+```
+
+Dry-run 2026-04-15 18:00 UTC confirmed 7 rows, all strategy-tagged (so `--all-untagged` would miss them), total $22.99 cost basis. Sells are priced at `0.01` which effectively crosses any bid — net expectation at current prices is ~$21-22 recovered on high-prob favorites.
 
 ## Next actionable work (prioritized — ALL GATED on recap-day list above)
 
