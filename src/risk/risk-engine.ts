@@ -180,6 +180,43 @@ export class RiskEngine {
       }
     }
 
+    // G2 (2026-04-15): portfolio-wide exposure cap.
+    //
+    // max_strategy_envelope_pct caps a single strategy. max_cluster_pct caps
+    // a correlated group. But neither catches concentration across the
+    // ENTIRE portfolio — the exact failure mode on 4/13, where ~8 positions
+    // across several strategies/clusters individually passed their gates
+    // but collectively hit ~60% of equity before the 20% drawdown kill
+    // switch tripped. This check sums cost_basis across every open position
+    // for the entity and rejects the new order if it would push the
+    // portfolio over the cap.
+    //
+    // Interaction with existing caps: additive, not replacement. A new
+    // order must pass ALL of min_edge, envelope_pct, cluster_pct, AND
+    // portfolio_exposure_pct. The portfolio cap is the outer guardrail;
+    // the others are finer-grained.
+    //
+    // Exits bypass (same as the other caps) — closing a position never
+    // increases exposure.
+    const portfolioExposurePct = this.limits.max_portfolio_exposure_pct ?? 0.15;
+    if (!isExit && portfolioExposurePct > 0) {
+      const equity = computeEquity();
+      const portfolioCapUsd = equity * portfolioExposurePct;
+      if (portfolioCapUsd > 0) {
+        const currentDeployed = getOpenCached().reduce((s, p) => s + (p.cost_basis || 0), 0);
+        const proposedIncrement = signal.recommended_size_usd ?? 0;
+        if (currentDeployed + proposedIncrement > portfolioCapUsd) {
+          violations.push({
+            rule: 'portfolio_exposure',
+            message: `portfolio deployed $${currentDeployed.toFixed(2)} + proposed $${proposedIncrement.toFixed(2)} > portfolio cap $${portfolioCapUsd.toFixed(2)} (${(portfolioExposurePct * 100).toFixed(0)}% of equity $${equity.toFixed(2)})`,
+            severity: 'block',
+            current_value: currentDeployed + proposedIncrement,
+            limit_value: portfolioCapUsd,
+          });
+        }
+      }
+    }
+
     // Calculate position size. Exits use the signal's recommended_size_usd directly
     // (full position sell), bypassing Kelly + weighter + caps since we're exiting,
     // not sizing a new entry.

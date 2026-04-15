@@ -42,6 +42,17 @@ const riskLimitsSchema = z.object({
   // keyword cluster like "us-election-2026", or weather-day grouping).
   // Default 0.15 = 15% of trading_balance. Set to 0 to disable.
   max_cluster_pct: z.number().min(0).max(1).default(0.15),
+  // G2 (2026-04-15): aggregate portfolio exposure cap. Sum of cost_basis
+  // across ALL open positions for an entity cannot exceed this fraction of
+  // equity. Distinct from max_strategy_envelope_pct (per-strategy) and
+  // max_cluster_pct (per correlated group) — this is the outer, strategy-
+  // agnostic guardrail that catches concentration across uncorrelated
+  // positions. Root cause of the 4/13 blow-up: ~8 positions each passed
+  // per-position + cluster gates but collectively hit ~60% of equity. With
+  // this cap set to 0.15, the 4th+ orders would have been blocked. Additive
+  // to kill-switch (drawdown after-the-fact) — this is concentration before-
+  // the-fact. Set to 0 to disable.
+  max_portfolio_exposure_pct: z.number().min(0).max(1).default(0.15),
   // Phase 2.5: trailing profit lock. Tracks peak unrealized PnL % per
   // position. When current PnL drops below peak * trailing_retention_pct,
   // trigger a profit-target exit at the retained level. Never fires below
