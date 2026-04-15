@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3+G4b code landed & R&D-verified — prod still on old binary pending G4a backlog sweep + SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed 2026-04-15 commit `3bc2de3`, verified against the 7 open prod positions via `--dry-run`.)
+**Updated: 2026-04-15** (PROD and R&D both running the same G1+G2+G3+G4b binary as of 18:11 UTC. Prod is halted via persisted `kill_switch_state` row, waiting on operator G4a backlog sweep + G5 cap right-sizing + G6 SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed commit `3bc2de3`, dry-run verified against the 7 open prod positions. G2 knob made explicit in prod yaml via commit `02dc5db`.)
 
 ## Start-of-session checklist for any Claude
 
@@ -37,7 +37,17 @@ Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. W
 3. `systemctl restart polybot-v3-rd` → new PID 323962 logs `KILL SWITCH RE-HALTED FROM PERSISTED STATE — operator must SIGUSR2 to release`, `halted_at` preserved ✅
 4. `kill -USR2 $PID` → row `halted=0` (reason history preserved for forensics), health returns to `kill_switch_halted:false` ✅
 
-**Status: DONE and R&D-verified.** Prod still runs the old binary (no restart since 2026-04-13); it will pick up G1+G2+G3 only when Dale does the deliberate SIGUSR2 release at gate G6. Once prod restarts on the new binary, the persisted row will re-halt the engine on every subsequent restart until the operator explicitly resumes.
+**Status: DONE and verified on both engines.**
+
+**Prod deploy (2026-04-15 18:09-18:11 UTC):** old prod binary was a pre-G1 build from before 2026-04-13. Health showed `kill_switch_halted: true` but only in-memory — any crash/restart would have auto-resumed live trading (the exact 4/13 failure mode). Sequence executed:
+
+1. Pre-wrote persisted halt row to `polybot.db` via raw SQL INSERT (old binary doesn't know about the table):
+   `(1, 1, 'operator_sigusr1', 'pre-restart halt 2026-04-15 — bring prod binary up to G1+G2+G3+G4b spec; operator SIGUSR2 to release at recap-day G6', '2026-04-15 18:09:08', ...)`
+2. `systemctl restart polybot-v3` → new PID 328626 boots on new binary, logs `"KILL SWITCH RE-HALTED FROM PERSISTED STATE"` with the exact persisted message ✅
+3. Made G2 `max_portfolio_exposure_pct: 0.15` explicit in prod `config/default.yaml` (commit `02dc5db`) so the knob is auditable/tunable at G5. No behavioral change — 0.15 matches the code default.
+4. Second restart to load new yaml → new PID 330529, same "re-halted from persisted state" log, halt row unchanged (loader is read-only) ✅
+
+Prod is now on the same binary as R&D. The persisted row re-halts the engine on every subsequent restart until the operator explicitly `kill -USR2 $(systemctl show polybot-v3 -p MainPID --value)`.
 
 ### G2. Add portfolio-wide exposure cap — DONE 2026-04-15
 
