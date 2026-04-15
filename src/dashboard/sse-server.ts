@@ -10,7 +10,7 @@ import { getEntityPnlView } from '../storage/repositories/entity-repo.js';
 import { getTradesByEntity } from '../storage/repositories/trade-repo.js';
 import { getOpenPositions, getOpenPositionsWithMarketMeta } from '../storage/repositories/position-repo.js';
 import { getOrdersByEntity, getOpenOrders } from '../storage/repositories/order-repo.js';
-import { getResolutionsByEntity, getStrategyPerformance } from '../storage/repositories/resolution-repo.js';
+import { getResolutionsByEntity, getStrategyPerformance, getStrategyRolling } from '../storage/repositories/resolution-repo.js';
 import { getSnapshots } from '../storage/repositories/snapshot-repo.js';
 import { getMarketCount, getActiveMarkets } from '../storage/repositories/market-repo.js';
 import { createChildLogger } from '../core/logger.js';
@@ -267,6 +267,10 @@ export class DashboardServer {
       if (path === '/api/entities')    return this.jsonResponse(res, getEntityPnlView());
       if (path === '/api/markets')     return this.jsonResponse(res, { counts: getMarketCount(), active: getActiveMarkets().slice(0, 50) });
       if (path === '/api/strategies')  return this.jsonResponse(res, getStrategyPerformance());
+      if (path === '/api/strategies/rolling') {
+        const entityParam = url.searchParams.get('entity') ?? undefined;
+        return this.jsonResponse(res, getStrategyRolling(entityParam));
+      }
       if (path === '/api/rd-strategies') return this.jsonResponse(res, this.getRdStrategies());
       // R3b endpoints (2026-04-10) — additive, dashboard structure preserved
       if (path === '/api/kill-switch' && req.method === 'GET') return this.jsonResponse(res, killSwitch.status());
@@ -562,6 +566,11 @@ tr:hover { background: rgba(15,17,23,0.6); }
     <tbody id="strategiesBody"><tr><td colspan="11" style="color:#718096;text-align:center">Loading...</td></tr></tbody></table>
   </div>
   <div class="section">
+    <h2>Strategy Rolling P&amp;L <span style="color:#718096;font-size:0.65em;font-weight:400;margin-left:10px">24h / 48h / 72h / all-time &mdash; per-trade P&amp;L is the decision metric</span></h2>
+    <table><thead><tr><th>Strategy</th><th>Sub-Strategy</th><th>Window</th><th>n</th><th>Win Rate</th><th>Total P&amp;L</th><th>Per-Trade</th><th>Best</th><th>Worst</th></tr></thead>
+    <tbody id="rollingBody"><tr><td colspan="9" style="color:#718096;text-align:center">Loading...</td></tr></tbody></table>
+  </div>
+  <div class="section">
     <h2>Live Events <span class="count" id="eventCount">(0)</span></h2>
     <div class="events-log" id="eventsLog" style="max-height:300px;overflow-y:auto;font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#0f1117;padding:12px;border-radius:8px;border:1px solid #2d3748;">
       <div class="event"><span style="color:#4a5568">--:--:--</span> Waiting for events...</div>
@@ -575,10 +584,11 @@ const cls = v => v > 0 ? 'green' : v < 0 ? 'red' : 'neutral';
 
 let eventCounter = 0;
 async function load() {
-  const [entities, positions, strategies] = await Promise.all([
+  const [entities, positions, strategies, rolling] = await Promise.all([
     fetch('/api/entities').then(r=>r.json()),
     fetch('/api/'+SLUG+'/positions').then(r=>r.json()).catch(()=>[]),
     fetch('/api/strategies').then(r=>r.json()).catch(()=>[]),
+    fetch('/api/strategies/rolling?entity='+encodeURIComponent(SLUG)).then(r=>r.json()).catch(()=>[]),
   ]);
 
   const e = entities.find(x => x.slug === SLUG);
@@ -647,6 +657,34 @@ async function load() {
       const wrText = s.total_resolutions > 0 ? s.win_rate.toFixed(1)+'%' : '-';
       const subLabel = s.sub_strategy_id ? '<span style="background:#1e293b;color:#94a3b8;padding:2px 6px;border-radius:4px;font-size:0.7em">'+s.sub_strategy_id+'</span>' : '<span style="color:#4a5568">—</span>';
       return '<tr><td><span style="background:#2d3748;padding:2px 6px;border-radius:4px;font-size:0.7em">'+s.strategy_id+'</span></td><td>'+subLabel+'</td><td>'+s.total_trades+'</td><td class="orange">'+(s.open_positions||0)+'</td><td>'+fmt(s.open_cost_basis||0)+'</td><td class="green">'+fmt(s.open_upside||0)+'</td><td>'+(s.total_resolutions||0)+'</td><td><span class="green">'+(s.wins||0)+'</span>/<span class="red">'+(s.losses||0)+'</span></td><td class="'+wrCls+'">'+wrText+'</td><td class="'+cls(s.total_pnl)+'">'+fmt(s.total_pnl||0)+'</td><td>'+fmt(s.total_volume||0)+'</td></tr>';
+    }).join('');
+  }
+
+  // Strategy Rolling P&L (24h/48h/72h/all_time)
+  const rb = document.getElementById('rollingBody');
+  if (!rolling || rolling.length === 0) {
+    rb.innerHTML = '<tr><td colspan="9" style="color:#718096;text-align:center">No rolling data yet</td></tr>';
+  } else {
+    const windowOrder = { '24h': 1, '48h': 2, '72h': 3, 'all_time': 4 };
+    const sorted = rolling.slice().sort((a, b) => {
+      const ak = a.strategy_id + '|' + (a.sub_strategy_id || '');
+      const bk = b.strategy_id + '|' + (b.sub_strategy_id || '');
+      if (ak !== bk) return ak.localeCompare(bk);
+      return (windowOrder[a.window_label] || 9) - (windowOrder[b.window_label] || 9);
+    });
+    // Signal group boundaries with a subtle top border every 4 rows (one per strategy/sub).
+    rb.innerHTML = sorted.map((r, i) => {
+      const isFirstOfGroup = r.window_label === '24h';
+      const rowStyle = isFirstOfGroup && i > 0 ? ' style="border-top:2px solid #2d3748"' : '';
+      const perTradeCls = cls(r.avg_pnl_per_trade || 0);
+      const pnlCls = cls(r.total_pnl || 0);
+      const wrCls = r.n > 0 ? (r.win_rate > 60 ? 'green' : r.win_rate > 40 ? 'orange' : 'red') : 'neutral';
+      const wrText = r.n > 0 ? r.win_rate.toFixed(1) + '%' : '-';
+      const subLabel = r.sub_strategy_id ? '<span style="background:#1e293b;color:#94a3b8;padding:2px 6px;border-radius:4px;font-size:0.7em">'+r.sub_strategy_id+'</span>' : '<span style="color:#4a5568">—</span>';
+      const stratLabel = isFirstOfGroup ? '<span style="background:#2d3748;padding:2px 6px;border-radius:4px;font-size:0.7em">'+r.strategy_id+'</span>' : '<span style="color:#4a5568;font-size:0.7em">\u00b7</span>';
+      const subCell = isFirstOfGroup ? subLabel : '<span style="color:#4a5568;font-size:0.7em">\u00b7</span>';
+      const windowBadge = '<span style="background:#0f1117;color:#94a3b8;padding:2px 6px;border-radius:4px;font-size:0.7em;font-weight:600">'+r.window_label+'</span>';
+      return '<tr'+rowStyle+'><td>'+stratLabel+'</td><td>'+subCell+'</td><td>'+windowBadge+'</td><td>'+r.n+'</td><td class="'+wrCls+'">'+wrText+'</td><td class="'+pnlCls+'">'+fmt(r.total_pnl||0)+'</td><td class="'+perTradeCls+'"><strong>'+fmt(r.avg_pnl_per_trade||0)+'</strong></td><td class="green">'+fmt(r.best_trade||0)+'</td><td class="red">'+fmt(r.worst_trade||0)+'</td></tr>';
     }).join('');
   }
 }

@@ -54,6 +54,20 @@ export function getStrategyPerformance(): StrategyPerfRow[] {
   return db.prepare('SELECT * FROM v_strategy_performance').all() as StrategyPerfRow[];
 }
 
+// 2026-04-15: rolling 24h/48h/72h/all_time per (strategy, sub, entity) — added
+// after the longshot 0.83-dead-zone memo kill verdict showed all-time averages
+// were hiding a self-correction that had already happened. See
+// docs/longshot-0.83-dead-zone-2026-04-15.md and v_strategy_rolling in schema.ts.
+export function getStrategyRolling(entitySlug?: string): StrategyRollingRow[] {
+  const db = getDatabase();
+  if (entitySlug) {
+    return db.prepare(
+      'SELECT * FROM v_strategy_rolling WHERE entity_slug = ?',
+    ).all(entitySlug) as StrategyRollingRow[];
+  }
+  return db.prepare('SELECT * FROM v_strategy_rolling').all() as StrategyRollingRow[];
+}
+
 export interface ResolutionRow {
   id: number;
   entity_slug: string;
@@ -102,4 +116,22 @@ export interface StrategyPerfRow {
   open_upside: number;
   total_trades: number;
   total_volume: number;
+}
+
+export interface StrategyRollingRow {
+  strategy_id: string;
+  sub_strategy_id: string;
+  entity_slug: string;
+  window_label: '24h' | '48h' | '72h' | 'all_time';
+  n: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl_per_trade: number;
+  best_trade: number;
+  worst_trade: number;
+  first_resolved_at: string;
+  last_resolved_at: string;
 }
