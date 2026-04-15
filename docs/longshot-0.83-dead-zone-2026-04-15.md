@@ -1,8 +1,49 @@
 # Longshot 0.83-dead-zone diagnosis — 2026-04-15
 
+> ## ⚠ 2026-04-15 KILL VERDICT — hypothesis falsified, filter NOT shipping
+>
+> A robustness audit of this memo's own hypothesis (run the same afternoon it was written) showed the 0.83-0.84 "dead zone" effect is an **overfit to the 2026-04-11 burn-in day** and does not survive any of the four pre-committed kill conditions. The filter proposal in §"Proposed fix" below is **permanently shelved**. Keeping the original analysis intact below for reasoning-trail auditability.
+>
+> ### What the audit found
+>
+> | Kill condition | Threshold | Actual | Verdict |
+> |---|---|---|---|
+> | K1 day dispersion | <5 distinct days | 6 days but **68% of loss from 2026-04-11 alone** (-$68.96 of -$101.83) | **FAIL (effective)** |
+> | K2 market concentration | <10 distinct markets | 8 distinct losing markets on 4/11, ALL sports day-of-game outcomes (Bolivian soccer, Chinese soccer, NBA spreads, Mobile Legends, etc.) | **FAIL (cluster effect, not price-band effect)** |
+> | K3 chronological train/test | Second-half positive | Dead-zone second-half −$20.28 vs first-half −$81.54 (4x shrinkage). Sports-longshot second-half **positive at +$41.92** | **FAIL** |
+> | K4 sub-strategy coverage | <2 of 3 subs | 2 of 3 (news_overreaction_fade and bucketed_fade; systematic_fade absent by precedence) | passes narrowly, moot given K1-K3 |
+>
+> Three kill conditions fire. Shipping the filter would be "fighting the last war."
+>
+> ### The real picture once the audit was complete
+>
+> Rolling-window longshot P&L on R&D as of 2026-04-15 18:30 UTC:
+>
+> | Window | n | Total P&L | Per-trade | WR |
+> |---|---|---|---|---|
+> | All-time | 668 | −$23.83 | −$0.036 | 79.6% |
+> | Last 72h | 530 | +$37.49 | +$0.071 | 81.3% |
+> | **Last 48h** | **370** | **+$51.68** | **+$0.140** | **81.6%** |
+> | Last 24h | 221 | +$8.32 | +$0.038 | 83.3% |
+>
+> Longshot **already self-corrected**. The existing edge threshold (0.02) and G2 portfolio-exposure cap (0.15) compressed daily signal throughput from 1307/day (2026-04-10) to ~185/day (last 48h) and in doing so eliminated the low-quality signals that drove the 4/11 sports-cluster loss. No new filter is needed. The all-time −$23 deficit is a backward-looking artifact that the strategy has already earned back over the most recent window.
+>
+> ### Why the memo was wrong
+>
+> 1. **Price-band bucketing obscured a market-category effect.** The 0.83-0.84 fadePrice band is where sports markets' favorite-side tokens tend to price on game day. When R&D fired on same-day sports fades on 4/11 and the favorites won (as favorites do), the losses all landed in the 0.83-0.84 bucket — but the *cause* was "fading a favorite hours before the actual game" not "the 0.83-0.84 price range is structurally bad."
+> 2. **Single-window all-time stats hide regime changes.** The strategy at 1307/day with a 50% WR in the target band is a completely different strategy than the same code running at 185/day with an 82% WR. Treating both as one dataset flattened away the signal that the problem had already fixed itself.
+> 3. **I skipped the train/test split on the memo's own claim.** Four kill conditions were the right instinct but I wrote them in the memo and then *didn't run them myself before shipping the memo*. Dale's commitment 7.3 pushback ("you're just executing, give me your actual opinion") is exactly the failure mode this memo exhibited — I executed the post-hoc analysis, wrote a persuasive narrative, and invited approval to ship. I should have audited my own hypothesis before presenting.
+>
+> ### New action, not new filter
+>
+> Ship a `v_strategy_rolling` SQL view that surfaces per-strategy and per-sub-strategy rolling 24h / 48h / 72h windows (n, total_pnl, per_trade, WR) so the rolling metric is visible in the dashboard and so future Claude sessions cannot fall into the same all-time-average trap. This replaces the filter work from this memo.
+>
+> ### Archived memo content continues below
+> ---
+
 **Question (from `docs/todo.md` next-actionable #5):** `longshot.news_overreaction_fade` has 71.7% WR on n≥50 but -$37.30 total P&L. Execution slippage or exit timing?
 
-**Answer:** neither. It's **structural payoff asymmetry concentrated in two entry-price bins (0.83 and 0.84) that lose ~$102 of P&L between them** — more than the full longshot strategy deficit. Everywhere else the strategy is either clearly profitable or near break-even.
+**Answer (archived, superseded by kill verdict above):** neither. It's **structural payoff asymmetry concentrated in two entry-price bins (0.83 and 0.84) that lose ~$102 of P&L between them** — more than the full longshot strategy deficit. Everywhere else the strategy is either clearly profitable or near break-even.
 
 ## Method
 
