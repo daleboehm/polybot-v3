@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-15** (PROD and R&D both running the same G1+G2+G3+G4b binary as of 18:11 UTC. Prod is halted via persisted `kill_switch_state` row, waiting on operator G4a backlog sweep + G5 cap right-sizing + G6 SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed commit `3bc2de3`, dry-run verified against the 7 open prod positions. G2 knob made explicit in prod yaml via commit `02dc5db`.)
+**Updated: 2026-04-15** (PROD and R&D both running the same G1+G2+G3+G4b+`v_strategy_rolling` binary as of 18:32 UTC. Prod is halted via persisted `kill_switch_state` row, waiting on operator G4a backlog sweep + G5 cap right-sizing + G6 SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed commit `3bc2de3`, dry-run verified against the 7 open prod positions. G2 knob made explicit in prod yaml via commit `02dc5db`. Rolling-window observability (`v_strategy_rolling` view + `/api/strategies/rolling` endpoint + entity dashboard section) landed commits `41a0978` + `8ef142f` after the longshot 0.83-dead-zone kill verdict — the decision surface now shows per-trade P&L over 24h/48h/72h/all-time per (strategy, sub), so future sessions can't fall back into the all-time-average trap.)
 
 ## Start-of-session checklist for any Claude
 
@@ -153,19 +153,45 @@ The scan found 139 wallets with WR ≥ 70% and n ≥ 20 from `/tmp/scan_results.
 
 Check if stop-loss monitor's exit signals properly flow through the engine pipeline (bypass edge check, daily loss check, max position check — but respect kill switch and cash available). Currently works for paper; verify for live.
 
-### 5. Strategy refinements based on R&D data
+### 5. Strategy refinements based on R&D data — SUPERSEDED by rolling-window view (2026-04-15)
 
-R&D (the exploration engine with $10K paper) shows these clear winners (n ≥ 50):
-- `favorites.compounding`: 53.2% WR, n=562, +$144.78 ✅
-- `longshot.bucketed_fade`: 80.9% WR, n=157, +$23.52 ✅
-- `convergence.long_term_grind`: 66.7% WR, n=126, +$7.37 ✅
+Original memo "why is news_overreaction_fade beating Wilson but losing money?" triggered a post-hoc analysis (`docs/longshot-0.83-dead-zone-2026-04-15.md`) that proposed a fadePrice filter. Four pre-committed kill conditions were then run against the memo's own hypothesis — three fired. The filter was **permanently shelved** (see kill verdict at the top of that memo).
 
-And clear losers (should stay disabled):
-- `favorites.stratified_bias`: 35.3% WR → already disabled by advisor
-- `favorites.fan_fade`: 4.8% WR → already disabled
-- `longshot.news_overreaction_fade`: 71.7% WR but -$37.30 (edge masked by negative P&L)
+The real finding: longshot **already self-corrected** via the existing G2 portfolio-exposure cap and edge threshold, which compressed signal throughput from 1307/day to ~185/day and in doing so eliminated the low-quality signals that drove the 4/11 sports-cluster loss. Single-window all-time stats were hiding the regime change.
 
-Consider: why is news_overreaction_fade beating Wilson but losing money? Possibly execution slippage or exit timing — worth investigating.
+Action taken instead of a filter: `v_strategy_rolling` SQL view + `/api/strategies/rolling` endpoint + entity dashboard section surfacing rolling 24h/48h/72h per-trade P&L alongside all-time (commits `41a0978`, `8ef142f`). Live on both engines 2026-04-15.
+
+Current R&D rolling snapshot (2026-04-15 18:32 UTC):
+
+| Strategy.Sub | 24h per-trade | 48h per-trade | All-time per-trade |
+|---|---:|---:|---:|
+| longshot.bucketed_fade | -$0.02 n=67 | **+$0.29 n=120** | +$0.10 n=219 |
+| longshot.news_overreaction_fade | **+$0.13 n=119** | +$0.09 n=184 | -$0.06 n=330 |
+| longshot.systematic_fade | -$0.25 n=40 | -$0.05 n=71 | -$0.25 n=124 |
+| favorites.compounding | -$1.00 n=13 | +$0.14 n=47 | **+$0.23 n=571** |
+| convergence.long_term_grind | +$0.08 n=44 | +$0.06 n=68 | +$0.06 n=166 |
+
+Readable on the R&D dashboard at `/entity/rd-engine` in the new "Strategy Rolling P&L" section. This is the decision surface for future SIGUSR2-release judgment calls.
+
+### 5b. Open research threads (keep moving forward — 2026-04-15)
+
+Per Dale's "keep moving forward on all angles" directive, ongoing validation work to build confidence in design/architecture before attempting the $22→$50 prod goal:
+
+- **Scout overlay zero-fires on longshot** — scouts fire volume-spike / price-jump / LLM-news markers but `applyScoutOverlay()` was reading 0/8795 matches on longshot sample. Is the cache-key mismatch or intentional? Would a fix amplify winners 1.1-1.25x as designed?
+- **Whale consensus CLI is deployed but never run** — 10 markets with 4-9 high-WR whales agreeing sit idle. Good generative-hypothesis test once rolling-window per-trade stays positive for another 48h.
+- **Exit-signal wiring on live mode (R1 PR #2)** — stop-loss monitor flow verified for paper, not for live. Low priority while prod is halted but must clear before G6.
+- **G4b reconciler regression test** — manual verification only so far. Add a unit test covering (a) paper short-circuit, (b) zero-value skip, (c) neg-risk vs CTF dispatch, (d) failure-keeps-db-open path.
+- **Wallet-pattern research** — look at top Polymarket wallets' entry-price distributions and hold-time patterns and compare to polybot's actual behavior. "Are we doing what successful wallets do?"
+
+### 5c. $22 → $50 prod goal — GATED on confidence-in-design (2026-04-15)
+
+Dale's future ask: "turn my $22 in prod into $50" — gated on my confidence in design and architecture. Not starting until:
+1. Rolling 48h per-trade P&L on R&D stays positive for 72h (self-imposed burn-in).
+2. G4a backlog sweep is clear (~$286 USDC).
+3. G5 cap right-sizing is set for the actual deposit amount.
+4. At least one open research thread from §5b returns a concrete finding (validated or killed).
+
+Current R&D last-48h per-trade: +$0.14 at 81.6% WR on 370 trades (cross-strategy). If that holds through 2026-04-17 18:30 UTC, gate (1) clears.
 
 ## Daily automated research
 
