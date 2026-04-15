@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3 code landed & R&D-verified — prod still on old binary pending SIGUSR2 release)
+**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3+G4b code landed & R&D-verified — prod still on old binary pending G4a backlog sweep + SIGUSR2 release)
 
 ## Start-of-session checklist for any Claude
 
@@ -59,8 +59,35 @@ Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. W
 
 **Status:** quarantine is in code. R&D deploy still needed to activate on the VPS binary. Gate remains blocking until R&D shows Wilson LB ≥ 0.50 on n ≥ 50 live-matched trades.
 
-### G4. Verify auto-claim flow end-to-end
-stacyonchain research flagged auto-claim as "not optional" — unclaimed resolved positions are dead capital. `src/execution/neg-risk-redeemer.ts` exists but behavior under UMA `proposed` state needs verification. Position 1629 (White House posts 180-199, NO 0.991, currently `proposed`) is the natural test case — watch it through resolution and confirm the redeemer fires.
+### G4. Auto-claim flow end-to-end
+
+**Audit finding (2026-04-15):** `src/market/on-chain-reconciler.ts` line 247 used to be `void redeemer;` with a stale comment claiming per-cycle redemption was "deferred until the Data API provides a reliable redeemable flag." That flag has been reliable since the Phase -1 fix on 2026-04-11, so the deferral was invalid. The reconciler was DB-closing winning positions via Data API `cashPnl` without ever claiming the USDC on-chain. Result: ~$286 of dead capital on the prod wallet across 25 positions, headlined by a $229 Beijing weather redemption. stacyonchain's "auto-claim is not optional" was literally correct.
+
+Split into G4a (operator action on backlog) and G4b (code fix for the reconciler):
+
+#### G4a. Clear the current backlog — OPERATOR ACTION (~$286 pending)
+
+Dale runs the already-tested CLI once fresh USDC is back on the wallet, BEFORE restarting prod for G6:
+
+```bash
+ssh -i ~/.armorstack-vault/polymarket/armorstack_vps_key -p 2222 root@178.62.225.235 \
+  'cd /opt/polybot-v3 && node dist/cli/index.js redeem-all --entity polybot --execute'
+```
+
+Dry-run first (omit `--execute`). The CLI already handles approval checks, neg-risk vs CTF dispatch, and per-position tx confirmation. This is live money, so it is NOT automated — Dale's call.
+
+#### G4b. Wire auto-redeem into the reconciler — DONE 2026-04-15
+
+**Implemented in commit `bd73f74`:**
+- `on-chain-reconciler.ts` dead-bucket branch now attempts redemption BEFORE closing the DB row.
+- Rules: paper entities (redeemer === null) skip redemption; zero-value positions (losses, `currentValue === 0`) skip redemption (gas waste); winning positions with a live redeemer go through `redeemDeadPosition()` which picks `NegRiskAdapter.redeemPositions` (neg-risk, `[yesMicro, noMicro]`) vs `CTF.redeemPositions` (standard binary) based on `dead.negativeRisk`.
+- Failure mode is redeem-first-close-on-success: if redemption fails, the DB row is left open and `result.errors` records it, so the next reconcile cycle retries. This prevents the "DB says closed, cash is stuck" hole.
+- `closeDbPosition()` gained an `onChainTxHash` param plumbed into the resolution row's `tx_hash` field (was hardcoded null). `tx_hash IS NOT NULL` is the auto-claim audit trail going forward.
+- On success, the real on-chain USDC delta overrides the Data API `payout`/`cashPnl` estimates for the resolution row.
+
+**R&D verification (2026-04-15 17:05 UTC):** cold restart on PID 324906, `Kill switch persistence: no active halt to restore`, `Skipping startup reconciliation — no wallet address (paper or unprovisioned entity)`, no errors in the new path (paper entity has `redeemer === null` so the branch short-circuits unchanged). Full engine up: 9 strategies, 5000 markets, paper-only.
+
+**Status:** code DONE and R&D-verified. Effective on prod only after Dale's SIGUSR2 release at G6. Position 1629 (White House posts 180-199, `proposed` at halt time) is still the natural live test case once the backlog is cleared and the new binary is running — when UMA finalizes and the position hits the dead bucket, the reconciler will auto-claim and the resolution row will carry a real `tx_hash`.
 
 ### G5. Right-size caps for new capital level
 $20 abs cap is correct for $257 seed but too tight for $1K+:
