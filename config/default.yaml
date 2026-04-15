@@ -31,6 +31,10 @@ risk:
   # Sprint mode: no per-strategy and no per-cluster caps
   max_strategy_envelope_pct: 0.0  # DISABLED for sprint
   max_cluster_pct: 0.0            # DISABLED for sprint
+  # G2 (2026-04-15): portfolio-wide total-exposure cap — orthogonal to
+  # envelope/cluster. Set explicitly here so the knob is auditable.
+  # Tune this at recap-day G5 when the deposit amount is known.
+  max_portfolio_exposure_pct: 0.15  # 15% of equity across ALL open positions
   # Trailing profit lock still active — captures more on runners
   trailing_activation_pct: 0.20
   trailing_retention_pct: 0.70
