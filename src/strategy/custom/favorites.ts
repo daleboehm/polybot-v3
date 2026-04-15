@@ -135,7 +135,13 @@ export class FavoritesStrategy extends BaseStrategy {
         hoursToResolve >= 2 && hoursToResolve <= 48
       ) {
         const underdogSide: 'YES' | 'NO' = favoriteSide === 'YES' ? 'NO' : 'YES';
-        const underdogPrice = 1 - favoritePrice;
+        // Symmetry audit fix (2026-04-15): read the actual book price for the
+        // underdog side, not `1 - favoritePrice`. CLOB books frequently have
+        // `yes_price + no_price ≠ 1` due to spread; `1 - favoritePrice` would
+        // place the maker a tick below/above the real book and either miss the
+        // fill or execute at a stale price the strategy didn't intend. See
+        // docs/symmetry-audit-2026-04-15.md §favorites.ts for the worked example.
+        const underdogPrice = favoriteSide === 'YES' ? market.no_price : market.yes_price;
         const underdogTokenId = favoriteSide === 'YES' ? market.token_no_id : market.token_yes_id;
         // Markov calibration for the underdog side. The Becker grid shows
         // that at 10-15¢ (typical underdog price), empirical resolution runs

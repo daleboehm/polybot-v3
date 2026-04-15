@@ -9,7 +9,7 @@
 import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
-import { calibratedYesProb, longshotBiasMultiplier, preferredExecutionModeForTail } from '../../market/markov-calibration.js';
+import { calibratedSideProb, longshotBiasMultiplier, preferredExecutionModeForTail } from '../../market/markov-calibration.js';
 import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
@@ -99,9 +99,15 @@ export class LongshotStrategy extends BaseStrategy {
       //      curve at different price levels)
       //   3. Naive `impliedProb + 0.04` (last resort, kept for safety)
       const ownCalibration = baseRateCalibrator.getBaseRate(this.id, fadePrice);
-      // For fade strategies we want the probability of the FADE side (expensive)
-      // resolving YES. calibratedYesProb(fadePrice) gives us that directly.
-      const markovCalibration = calibratedYesProb(fadePrice);
+      // Symmetry audit fix (2026-04-15): we want the probability of the FADE
+      // side (expensive) resolving IN ITS OWN FAVOR — not the YES rate at this
+      // price. When fadeSide === 'NO', calibratedYesProb(fadePrice) asks the
+      // wrong question ("YES rate at no_price") and only agrees with the right
+      // answer because the Becker grid is near-symmetric. calibratedSideProb
+      // routes to the correct lookup branch. Numerical delta is <0.4% at
+      // tested prices, but the intent is now explicit. See
+      // docs/symmetry-audit-2026-04-15.md §longshot.ts.
+      const markovCalibration = calibratedSideProb(fadePrice, fadeSide);
       const usingCalibration = ownCalibration !== null;
       const expectedEdge = 0.04; // legacy heuristic fallback if Markov also unavailable
       const impliedProb = fadePrice;
