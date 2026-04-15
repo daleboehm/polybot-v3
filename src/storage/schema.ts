@@ -448,6 +448,31 @@ CREATE INDEX IF NOT EXISTS idx_wt_condition ON whale_trades(condition_id);
 CREATE INDEX IF NOT EXISTS idx_wt_observed ON whale_trades(observed_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wt_txhash ON whale_trades(tx_hash, token_id);
 
+-- ─── KILL SWITCH STATE (G1 — persisted halt, 2026-04-15) ─────────────
+-- The kill switch is a singleton in-memory flag. Without persistence it
+-- clears on process restart, which is exactly what took down prod on
+-- 2026-04-13: the halt fired at 13:36 UTC on a 43.8% daily drawdown, the
+-- process later restarted (OOM / systemctl / graceful-shutdown path), the
+-- in-memory flag cleared, and live trading auto-resumed into the broken
+-- longshot strategy. Trades 1347/1348 filled after the halt should have
+-- been in force.
+--
+-- Single-row table (CHECK id=1) — there is only ever one kill-switch
+-- state for a given engine process. On engine startup we read the row;
+-- if halted === 1 we call killSwitch.halt(reason, message) BEFORE any
+-- strategy or clob-router code runs, so the halt survives the restart.
+-- resume() (operator via SIGUSR2 or dashboard API) clears the row. This
+-- means restart does NOT resume trading — only deliberate operator
+-- action can clear the halt.
+CREATE TABLE IF NOT EXISTS kill_switch_state (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    halted      INTEGER NOT NULL DEFAULT 0,
+    reason      TEXT,
+    message     TEXT,
+    halted_at   TEXT,
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ─── VIEWS ──────────────────────────────────────────────────
 
 CREATE VIEW IF NOT EXISTS v_entity_pnl AS

@@ -190,6 +190,16 @@ export class Engine {
     const db = initDatabase(this.config.database.path);
     applySchema(db);
 
+    // 1a. G1 (2026-04-15): re-apply any persisted kill-switch halt BEFORE
+    // any strategy, risk, or execution code runs. If the last run was halted
+    // (operator SIGUSR1, drawdown breach, reconciliation failure, etc.), the
+    // row in kill_switch_state re-halts the in-memory singleton so clob-router
+    // will throw on the very first routeOrder call. The only way out is
+    // deliberate operator action (SIGUSR2 or dashboard resume). This is the
+    // fix for the 4/13 prod blow-up: the halt was in-memory only, process
+    // restart cleared it, live trading auto-resumed into broken longshot.
+    killSwitch.loadPersistedState();
+
     // 2. Load entities
     await this.entityManager.initialize();
 
