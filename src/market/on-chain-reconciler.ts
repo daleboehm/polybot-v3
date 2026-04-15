@@ -186,11 +186,78 @@ export class OnChainReconciler {
           // Realized PnL override: use the API's cashPnl directly when
           // finite, otherwise compute from payout - cost_basis (fallback).
           const realizedPnl = Number.isFinite(cashPnl) ? cashPnl : payout - dbPos.cost_basis;
+
+          // G4 (2026-04-15): auto-redeem winning positions on-chain BEFORE
+          // closing the DB row. Rationale: the old code path here just
+          // `void`-ed the redeemer and relied on the operator running
+          // `polybot redeem-all` by hand. In practice that left ~$286 of
+          // real USDC sitting as unclaimed conditional tokens on the prod
+          // wallet (25 positions, headlined by a $229 Beijing weather
+          // redemption) while the DB thought the positions were fully
+          // closed. stacyonchain's "auto-claim is not optional" was
+          // correct — unclaimed resolved positions are dead capital.
+          //
+          // Rules:
+          //   - Paper entities (redeemer === null): skip redemption, close
+          //     DB with API data. Same as before.
+          //   - Zero-value positions (losses, currentValue === 0): skip
+          //     redemption (nothing to claim, gas waste), close DB anyway.
+          //   - Winning positions with a live redeemer: attempt redemption
+          //     first. On success, use the real tx_hash and on-chain USDC
+          //     delta in the resolution row and close DB. On failure, log
+          //     and SKIP the DB close so the next cycle retries. Leaving
+          //     the DB row open is the correct failure mode: it guarantees
+          //     we don't silently book a close without the cash arriving.
+          let redeemResult: { txHash: string | null; claimedUsdc: number; error?: string } | null = null;
+          const shouldRedeem = redeemer !== null && payout > 0;
+          if (shouldRedeem) {
+            redeemResult = await this.redeemDeadPosition(redeemer!, dbPos, dead);
+            result.redemptions.push({
+              conditionId: dbPos.condition_id,
+              txHash: redeemResult.txHash ?? undefined,
+              claimedUsdc: redeemResult.claimedUsdc,
+              error: redeemResult.error,
+            });
+            if (redeemResult.error) {
+              // Redemption failed — do NOT close the DB row. Next reconcile
+              // cycle will see the position in the dead bucket again and
+              // retry. This is strictly better than closing in DB and
+              // leaving USDC stranded on-chain, because the retry loop
+              // will eventually succeed (transient RPC / approval fixes)
+              // and operators see the error in the logs + redemptions list.
+              log.warn(
+                {
+                  entity: entitySlug,
+                  condition: dbPos.condition_id.substring(0, 16),
+                  err: redeemResult.error,
+                },
+                'On-chain redemption failed — leaving DB position open for retry next cycle',
+              );
+              result.errors.push(`redemption_failed ${dbPos.condition_id.substring(0, 14)}: ${redeemResult.error}`);
+              continue;
+            }
+            // Success — credit the REAL on-chain USDC delta to the result
+            // (operators can see how much cash actually came back per cycle).
+            result.cashCredited += redeemResult.claimedUsdc;
+          }
+
+          // Close the DB row. For redeemed positions, use the real tx_hash
+          // and on-chain-claimed USDC as the payout (authoritative over
+          // the API's currentValue estimate). For losses / paper, fall
+          // back to the API's currentValue + cashPnl.
+          const finalPayout = redeemResult?.claimedUsdc && redeemResult.claimedUsdc > 0
+            ? redeemResult.claimedUsdc
+            : payout;
+          const finalRealizedPnl = redeemResult?.claimedUsdc && redeemResult.claimedUsdc > 0
+            ? redeemResult.claimedUsdc - dbPos.cost_basis
+            : realizedPnl;
           await this.closeDbPosition(
             dbPos,
             'absent_from_api',
-            payout,
-            realizedPnl,
+            finalPayout,
+            finalRealizedPnl,
+            undefined,
+            redeemResult?.txHash ?? null,
           );
           log.info(
             {
@@ -200,11 +267,16 @@ export class OnChainReconciler {
               current_value: currentValue,
               cash_pnl: cashPnl,
               cost_basis: dbPos.cost_basis,
-              realized_pnl: realizedPnl,
+              realized_pnl: finalRealizedPnl,
+              redeemed: shouldRedeem && !redeemResult?.error,
+              tx_hash: redeemResult?.txHash ?? null,
+              claimed_usdc: redeemResult?.claimedUsdc ?? 0,
             },
-            'close_absent via Data API cashPnl (authoritative)',
+            shouldRedeem && !redeemResult?.error
+              ? 'close_absent after on-chain redemption (authoritative)'
+              : 'close_absent via Data API cashPnl (authoritative)',
           );
-          result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: payout });
+          result.actions.push({ kind: 'close_absent', dbPosition: dbPos, payoutUsd: finalPayout });
           continue;
         }
 
@@ -234,17 +306,14 @@ export class OnChainReconciler {
       apiByAsset.delete(dbPos.token_id);
     }
 
-    // NOTE: we no longer attempt per-cycle on-chain redemption here. Positions that
-    // resolve on-chain disappear from the active API list and get closed as
-    // 'absent_from_api' in the next reconciliation cycle. If v3 owns redemption
-    // end-to-end (R4), a separate periodic redemption check should run against the
-    // active API to see which holdings are flagged redeemable — NOT based on the
-    // broken status=resolved filter. Deferred until the Data API behavior is
-    // verified or Polymarket CLOB SDK exposes a reliable redemption-status field.
-    // `redeemer` parameter kept for future redemption wiring. Currently unused
-    // because per-cycle on-chain redemption is disabled until the Data API
-    // provides a reliable "redeemable" flag. Void to silence unused-param lint.
-    void redeemer;
+    // G4 (2026-04-15): per-cycle on-chain redemption is now wired into the
+    // dead-bucket close_absent branch above (search for "auto-redeem" in
+    // this file). The old comment here claimed per-cycle redemption was
+    // disabled pending a reliable `redeemable` flag from the Data API —
+    // that flag has been reliable since the Phase -1 fix on 2026-04-11,
+    // so the deferral condition is no longer valid. Losing positions
+    // (currentValue === 0) still skip redemption because there's nothing
+    // to claim and gas is not free.
 
     // Pass 2: any ACTIVE API positions left in the map are orphans (crash-window
     // inserts, or positions opened by another process). Reconstruct a DB row so
@@ -316,6 +385,7 @@ export class OnChainReconciler {
     payoutUsd: number,
     realizedPnlOverride?: number,
     resolvedApiPos?: ApiResolvedPosition,
+    onChainTxHash?: string | null,
   ): Promise<void> {
     const realizedPnl = realizedPnlOverride ?? (payoutUsd - dbPos.cost_basis);
 
@@ -422,7 +492,11 @@ export class OnChainReconciler {
       sub_strategy_id: dbPos.sub_strategy_id ?? undefined,
       market_question: dbPos.market_question ?? resolvedApiPos?.title ?? '',
       market_slug: dbPos.market_slug ?? '',
-      tx_hash: null,
+      // G4 (2026-04-15): real on-chain redemption tx hash when auto-claim
+      // fired, null for paper / losses / off-chain redemption paths.
+      // Operator audit trail: `tx_hash IS NOT NULL` → we claimed it,
+      // `tx_hash IS NULL` → we didn't (or couldn't).
+      tx_hash: onChainTxHash ?? null,
       resolved_at: new Date(),
     });
 
@@ -455,6 +529,93 @@ export class OnChainReconciler {
     if (!s) return 0;
     const n = parseFloat(s);
     return Number.isFinite(n) ? n : 0;
+  }
+
+  /**
+   * G4 (2026-04-15): Execute on-chain redemption for a single dead-bucket
+   * position. Picks between NegRiskAdapter.redeemPositions (neg-risk markets)
+   * and CTF.redeemPositions (standard binary markets) based on the Data
+   * API's `negativeRisk` flag.
+   *
+   * Contract:
+   *   txHash ≠ null, error === undefined → tx confirmed on-chain, claimedUsdc
+   *     is the real wallet delta
+   *   txHash === null, error set         → RPC/contract failure, DB close
+   *     must be skipped so next cycle can retry
+   *
+   * Neg-risk amounts array convention (matches the tested CLI path in
+   * `polybot redeem-all`, which Polymarket's own contract source documents):
+   *   [yesAmount, noAmount] with 6-decimal USDC-like precision.
+   * We only redeem the side this wallet holds (the other side is 0n). The
+   * per-side amount is `floor(dbPos.size * 1e6)` micro-units.
+   *
+   * CTF.redeemPositions(collateralToken, parentCollectionId, conditionId,
+   * indexSets) takes no amount array — it burns all held tokens for the
+   * condition and pays out USDC for the winning outcome in a single tx.
+   */
+  private async redeemDeadPosition(
+    redeemer: NegRiskRedeemer,
+    dbPos: PositionRow,
+    dead: FullPosition,
+  ): Promise<{ txHash: string | null; claimedUsdc: number; error?: string }> {
+    const conditionIdHex = dbPos.condition_id as `0x${string}`;
+    const isNegRisk = dead.negativeRisk === true;
+
+    try {
+      if (isNegRisk) {
+        // Neg-risk: build [yesAmount, noAmount] with only our side populated.
+        const sizeMicro = BigInt(Math.floor(dbPos.size * 1_000_000));
+        const posSide = this.outcomeFromString(dbPos.side);
+        const amounts: bigint[] = posSide === 'YES' ? [sizeMicro, 0n] : [0n, sizeMicro];
+        log.info(
+          {
+            entity: dbPos.entity_slug,
+            condition: dbPos.condition_id.substring(0, 16),
+            side: posSide,
+            size: dbPos.size,
+            neg_risk: true,
+          },
+          'Auto-redeem: submitting NegRiskAdapter.redeemPositions',
+        );
+        const result = await redeemer.redeem(conditionIdHex, amounts);
+        if (!result.success) {
+          return { txHash: null, claimedUsdc: 0, error: result.error ?? 'neg-risk redeem returned !success' };
+        }
+        return {
+          txHash: result.txHash ?? null,
+          claimedUsdc: Number(result.usdcClaimed) / 1e6,
+        };
+      }
+
+      // Standard CTF: one call burns all held tokens for this condition.
+      log.info(
+        {
+          entity: dbPos.entity_slug,
+          condition: dbPos.condition_id.substring(0, 16),
+          neg_risk: false,
+        },
+        'Auto-redeem: submitting CTF.redeemPositions',
+      );
+      const result = await redeemer.redeemCtf(conditionIdHex);
+      if (!result.success) {
+        return { txHash: null, claimedUsdc: 0, error: result.error ?? 'CTF redeem returned !success' };
+      }
+      return {
+        txHash: result.txHash ?? null,
+        claimedUsdc: Number(result.usdcClaimed) / 1e6,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(
+        {
+          entity: dbPos.entity_slug,
+          condition: dbPos.condition_id.substring(0, 16),
+          err: msg,
+        },
+        'Auto-redeem threw unexpectedly',
+      );
+      return { txHash: null, claimedUsdc: 0, error: msg };
+    }
   }
 
   private outcomeFromString(s: string): Outcome {
