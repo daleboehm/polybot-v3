@@ -819,12 +819,21 @@ program
 // Usage:
 //   polybot sell-position --entity polybot --condition 0xc8c5760c2649...
 //   polybot sell-position --entity polybot --all-untagged  (sells all positions with no strategy_id)
+//   polybot sell-position --entity polybot --all-open      (sells EVERY open position regardless of tag)
+//
+// IMPORTANT (2026-04-15): this command goes directly to the CLOB client
+// (`client.createOrder` + `client.postOrder`) and does NOT route through
+// `clob-router.routeOrder()`. That means it BYPASSES the kill switch. This
+// is intentional — operators need an exit hatch when prod is halted and we
+// want to liquidate the live book without flipping the halt. If you want
+// kill-switch-gated sells, use the normal strategy exit path instead.
 program
   .command('sell-position')
-  .description('Sell a specific open position at market price (or all untagged positions)')
+  .description('Sell a specific open position at market price (or all untagged / all open positions)')
   .requiredOption('--entity <slug>', 'Entity slug')
   .option('--condition <id>', 'Condition ID to sell')
   .option('--all-untagged', 'Sell all positions with no strategy_id (legacy orphans)', false)
+  .option('--all-open', 'Sell EVERY open position on this entity (prod exit hatch — bypasses kill switch)', false)
   .option('--dry-run', 'Show what would be sold without submitting', false)
   .action(async (opts) => {
     const config = loadConfig();
@@ -846,7 +855,12 @@ program
     // Find positions to sell
     type PosRow = { condition_id: string; token_id: string; side: string; size: number; avg_entry_price: number; cost_basis: number; market_question: string; strategy_id: string | null };
     let positions: PosRow[];
-    if (opts.allUntagged) {
+    if (opts.allOpen) {
+      positions = db.prepare(
+        `SELECT condition_id, token_id, side, size, avg_entry_price, cost_basis, market_question, strategy_id
+         FROM positions WHERE entity_slug = ? AND status = 'open'`,
+      ).all(opts.entity) as PosRow[];
+    } else if (opts.allUntagged) {
       positions = db.prepare(
         `SELECT condition_id, token_id, side, size, avg_entry_price, cost_basis, market_question, strategy_id
          FROM positions WHERE entity_slug = ? AND status = 'open' AND (strategy_id IS NULL OR strategy_id = '')`,
@@ -857,7 +871,7 @@ program
          FROM positions WHERE entity_slug = ? AND status = 'open' AND condition_id LIKE ?`,
       ).all(opts.entity, opts.condition + '%') as PosRow[];
     } else {
-      console.error('Must specify --condition <id> or --all-untagged');
+      console.error('Must specify --condition <id>, --all-untagged, or --all-open');
       process.exit(1);
     }
 
