@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G2+G3 code landed, G1 hypothesis revised — see symmetry audit)
+**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G1+G2+G3 code landed & R&D-verified — prod still on old binary pending SIGUSR2 release)
 
 ## Start-of-session checklist for any Claude
 
@@ -15,17 +15,29 @@
 
 Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. When fresh USDC arrives, the following must be cleared IN ORDER before SIGUSR2 release. Nothing in "Next actionable work" below runs live until this list is green.
 
-### G1. Persist kill-switch state to SQLite (REVISED 2026-04-15)
+### G1. Persist kill-switch state to SQLite — DONE 2026-04-15
 
 **Original hypothesis (WRONG):** weather_forecast strategy path bypasses `killSwitch.isHalted()`.
 
 **Audit finding (see `docs/symmetry-audit-2026-04-15.md`):** `clob-router.routeOrder()` at line 30 calls `killSwitch.check()` unconditionally on every submission, and `kill-switch.ts:85-89` throws for every halt reason with no bypass. weather_forecast.ts returns `Signal[]` through the normal risk-engine → order-router pipeline — no out-of-band submission path exists. If the kill switch had been halted when trades 1347/1348 were attempted, `routeOrder` would have thrown. Since the trades filled, the kill switch was NOT halted at that moment.
 
-**Real root cause:** the kill switch is NOT persisted across process restarts (explicit design choice in `kill-switch.ts` lines 14-17). Between the 4/13 13:36 UTC halt and trades 1347/1348, the prod process must have restarted (OOM, systemctl, or uncaughtException graceful shutdown), clearing the in-memory halt state and auto-resuming live trading. This matches the existing start-of-session checklist warning item 5 exactly.
+**Real root cause:** the kill switch was NOT persisted across process restarts (explicit design choice in old `kill-switch.ts` lines 14-17). Between the 4/13 13:36 UTC halt and trades 1347/1348, the prod process must have restarted (OOM, systemctl, or uncaughtException graceful shutdown), clearing the in-memory halt state and auto-resuming live trading. This matches the existing start-of-session checklist warning item 5 exactly.
 
-**Real fix:** add a `kill_switch_state` table. On engine startup in `lifecycle.ts`, read the last row; if `halted === true`, call `killSwitch.halt(reason, message)` before any strategy or order-router code runs. `resume()` clears the row. Operator SIGUSR2 or dashboard API call are the only paths that can clear it. The comment in `kill-switch.ts` argues against persistence on recovery-lockout grounds, but the recovery path is manual operator intervention — persistence makes the halt survive restart while operator action remains the only way to resume.
+**Implemented in commit `edc649c`:**
+- New `kill_switch_state` table in `src/storage/schema.ts` DDL (single row, `CHECK (id = 1)`).
+- New `src/storage/repositories/kill-switch-repo.ts` with `getKillSwitchState`, `setKillSwitchState`, `clearKillSwitchState`.
+- `KillSwitch.halt()` writes the halted row (wrapped in try/catch — the halt path must never throw on DB failure).
+- `KillSwitch.resume()` clears the row on deliberate operator release.
+- New `KillSwitch.loadPersistedState()` method re-halts the in-memory singleton from the DB row on startup, emitting a fresh `killswitch:activated` event so alerters see the boot-halted state.
+- `engine.start()` calls `killSwitch.loadPersistedState()` immediately after `applySchema(db)`, BEFORE entity init / strategy registration / clob-router wiring.
 
-**Status:** NOT YET IMPLEMENTED. Needs a migration + ~20 lines in `kill-switch.ts` and `lifecycle.ts`. This is the last recap-day code gate.
+**R&D verification (2026-04-15 16:50 UTC):**
+1. Cold start → `Kill switch persistence: no active halt to restore`, health `kill_switch_halted:false` ✅
+2. `kill -USR1 $PID` → row `1|1|operator_sigusr1|SIGUSR1 received|2026-04-15T16:50:41.016Z` written, health flips to unhealthy ✅
+3. `systemctl restart polybot-v3-rd` → new PID 323962 logs `KILL SWITCH RE-HALTED FROM PERSISTED STATE — operator must SIGUSR2 to release`, `halted_at` preserved ✅
+4. `kill -USR2 $PID` → row `halted=0` (reason history preserved for forensics), health returns to `kill_switch_halted:false` ✅
+
+**Status: DONE and R&D-verified.** Prod still runs the old binary (no restart since 2026-04-13); it will pick up G1+G2+G3 only when Dale does the deliberate SIGUSR2 release at gate G6. Once prod restarts on the new binary, the persisted row will re-halt the engine on every subsequent restart until the operator explicitly resumes.
 
 ### G2. Add portfolio-wide exposure cap — DONE 2026-04-15
 
