@@ -1,6 +1,6 @@
 # Polybot V3 — TODO
 
-**Updated: 2026-04-14** (PROD HALTED 2026-04-13, R&D live, R1-R3c rebuild complete)
+**Updated: 2026-04-15** (PROD HALTED 2026-04-13, R&D live, G2+G3 code landed, G1 hypothesis revised — see symmetry audit)
 
 ## Start-of-session checklist for any Claude
 
@@ -15,18 +15,37 @@
 
 Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. When fresh USDC arrives, the following must be cleared IN ORDER before SIGUSR2 release. Nothing in "Next actionable work" below runs live until this list is green.
 
-### G1. Fix weather_forecast kill-switch bypass
-Evidence: trades 1347 + 1348 placed AFTER the 4/13 halt via `weather_forecast` strategy path. Combined exposure only $0.49 but the defect is real — `src/execution/clob-router.ts` order path for weather_forecast isn't checking `killSwitch.isHalted()` before submission. Audit ALL strategy → order-router paths for kill-switch checks; the halt primitive is only as good as its weakest caller.
+### G1. Persist kill-switch state to SQLite (REVISED 2026-04-15)
 
-### G2. Add portfolio-wide exposure cap (NEW 2026-04-14)
-**Gap:** Current risk stack caps per-position (`max_position_pct: 0.10`, `max_position_usd: 20`) but has NO aggregate exposure cap. On 4/13, the longshot cluster opened ~8 correlated positions that each passed the per-position gate but collectively reached ~60% of equity. A portfolio-level cap would have blocked the 4th+ orders and contained the blow-up before the 20% drawdown kill switch tripped.
+**Original hypothesis (WRONG):** weather_forecast strategy path bypasses `killSwitch.isHalted()`.
 
-**Proposed:** `max_portfolio_exposure_pct: 0.15` in `src/config/schema.ts`, enforced in `src/risk/risk-engine.ts` as a new pre-trade check that sums `open_positions.cost_basis` for the entity and rejects if adding the new order would exceed the cap. Reference: stacyonchain postmortem (2026-04-14 research) — same cap value he uses on a 3-strategy portfolio.
+**Audit finding (see `docs/symmetry-audit-2026-04-15.md`):** `clob-router.routeOrder()` at line 30 calls `killSwitch.check()` unconditionally on every submission, and `kill-switch.ts:85-89` throws for every halt reason with no bypass. weather_forecast.ts returns `Signal[]` through the normal risk-engine → order-router pipeline — no out-of-band submission path exists. If the kill switch had been halted when trades 1347/1348 were attempted, `routeOrder` would have thrown. Since the trades filled, the kill switch was NOT halted at that moment.
 
-**Interaction with kill switch:** Additive, not replacement. Kill switch catches *drawdown* after the fact; portfolio cap catches *concentration* before the fact. Both needed.
+**Real root cause:** the kill switch is NOT persisted across process restarts (explicit design choice in `kill-switch.ts` lines 14-17). Between the 4/13 13:36 UTC halt and trades 1347/1348, the prod process must have restarted (OOM, systemctl, or uncaughtException graceful shutdown), clearing the in-memory halt state and auto-resuming live trading. This matches the existing start-of-session checklist warning item 5 exactly.
 
-### G3. Disable longshot on live until R&D proves it post-divergence
-Paper-to-live divergence is the root cause of the 4/13 blow-up (R&D on identical code is flat, prod dropped 80%). Do NOT re-enable longshot on prod until R&D shows Wilson LB ≥ 0.50 on n ≥ 50 **live-matched** trades (not paper). Quarantine like value/skew/complement were, or flag-gate it with `LONGSHOT_LIVE_ENABLED=false`.
+**Real fix:** add a `kill_switch_state` table. On engine startup in `lifecycle.ts`, read the last row; if `halted === true`, call `killSwitch.halt(reason, message)` before any strategy or order-router code runs. `resume()` clears the row. Operator SIGUSR2 or dashboard API call are the only paths that can clear it. The comment in `kill-switch.ts` argues against persistence on recovery-lockout grounds, but the recovery path is manual operator intervention — persistence makes the halt survive restart while operator action remains the only way to resume.
+
+**Status:** NOT YET IMPLEMENTED. Needs a migration + ~20 lines in `kill-switch.ts` and `lifecycle.ts`. This is the last recap-day code gate.
+
+### G2. Add portfolio-wide exposure cap — DONE 2026-04-15
+
+**Implemented in commit `6e7b636`:**
+- `max_portfolio_exposure_pct: 0.15` added to `riskLimitsSchema` in `src/config/schema.ts`
+- New pre-trade check in `src/risk/risk-engine.ts` after the cluster cap: sums `cost_basis` across ALL open positions for the entity and rejects if `currentDeployed + proposedIncrement > equity * portfolioExposurePct`.
+- Additive to `max_strategy_envelope_pct`, `max_cluster_pct`, `min_edge`. Exits bypass.
+- Reuses `openPositionsCache` and `computeEquity()` from the envelope-check block above (single positions scan).
+
+**Status:** needs R&D deploy + 72h paper verification before it counts as cleared. Build on VPS will type-check the changes.
+
+### G3. Disable longshot on live until R&D proves it post-divergence — DONE 2026-04-15
+
+**Implemented in commit `e170d95`:**
+- `LongshotStrategy.shouldRun(ctx)` override in `src/strategy/custom/longshot.ts`.
+- Paper entities always run longshot (R&D needs the data to isolate the paper-to-live divergence).
+- Live entities only run longshot when `process.env.LONGSHOT_LIVE_ENABLED === 'true'`.
+- Belt-and-suspenders: even if yaml lists 'longshot' for a live entity, `shouldRun` blocks `evaluate()` from ever firing.
+
+**Status:** quarantine is in code. R&D deploy still needed to activate on the VPS binary. Gate remains blocking until R&D shows Wilson LB ≥ 0.50 on n ≥ 50 live-matched trades.
 
 ### G4. Verify auto-claim flow end-to-end
 stacyonchain research flagged auto-claim as "not optional" — unclaimed resolved positions are dead capital. `src/execution/neg-risk-redeemer.ts` exists but behavior under UMA `proposed` state needs verification. Position 1629 (White House posts 180-199, NO 0.991, currently `proposed`) is the natural test case — watch it through resolution and confirm the redeemer fires.
