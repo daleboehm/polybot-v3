@@ -29,6 +29,30 @@ export class LongshotStrategy extends BaseStrategy {
     return ['systematic_fade', 'bucketed_fade', 'news_overreaction_fade'];
   }
 
+  /**
+   * G3 (2026-04-15): longshot is the strategy family that blew up prod on
+   * 2026-04-13 (43.8% daily drawdown). R&D on identical code is flat-to-up
+   * on the same market set, so there's a paper-to-live divergence we have
+   * not isolated yet. Until we do, longshot must NOT run on live entities.
+   *
+   * Gate logic:
+   *   - Paper entities: always allowed (R&D needs to keep collecting data
+   *     so we can identify the divergence).
+   *   - Live entities: only runs when env LONGSHOT_LIVE_ENABLED === 'true'.
+   *     Default is unset → blocked. Requires deliberate operator action
+   *     (set env var + restart) to re-arm on live, in addition to whatever
+   *     SIGUSR2 release and portfolio-cap work unblocks the rest of the
+   *     recap-day gate list.
+   *
+   * This is belt-and-suspenders on top of the yaml strategy list. Even if
+   * an operator adds 'longshot' to a live entity's strategies array by
+   * mistake, shouldRun returns false and evaluate never runs.
+   */
+  override shouldRun(ctx: StrategyContext): boolean {
+    if (ctx.entity.config.mode === 'paper') return true;
+    return process.env.LONGSHOT_LIVE_ENABLED === 'true';
+  }
+
   async evaluate(ctx: StrategyContext): Promise<Signal[]> {
     this.cleanupDedup();
 
