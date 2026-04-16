@@ -16,6 +16,17 @@ import { createChildLogger } from '../../core/logger.js';
 
 const log = createChildLogger('strategy:convergence');
 const DEDUP_TTL_MS = 4 * 60 * 60 * 1000;
+// 2026-04-16 long_term_grind optimal-stopping: observation TTL. We keep first-seen
+// + min-observed-price for each condition_id for up to 31 days (slightly longer
+// than the 30-day ceiling of the long-horizon window). Entries older than this
+// are cleaned up alongside the dedup map.
+const LTG_OBSERVATION_TTL_MS = 31 * 24 * 60 * 60 * 1000;
+
+interface LtgObservation {
+  first_seen_ms: number;          // first time we saw this market in the LTG sweep
+  initial_hours_to_resolve: number; // hours-to-resolve at first_seen_ms
+  min_observed_price: number;     // lowest price we've seen for the high-prob side since first_seen
+}
 
 export class ConvergenceStrategy extends BaseStrategy {
   readonly id = 'convergence';
@@ -24,6 +35,12 @@ export class ConvergenceStrategy extends BaseStrategy {
   readonly version = '3.0.0';
 
   private recent = new Map<string, number>();
+  // 2026-04-16 long_term_grind optimal-stopping state. Keyed by condition_id.
+  // Persists across evaluate() cycles (strategy instance lives for the engine
+  // lifetime). In-memory only — a restart resets all observation windows,
+  // which is fine because the gate becomes more permissive over time so the
+  // worst case is ~37% of a resolve window delayed once per boot.
+  private ltgObservations = new Map<string, LtgObservation>();
 
   override getSubStrategies(): string[] {
     return ['filtered_high_prob', 'long_term_grind'];
@@ -149,6 +166,48 @@ export class ConvergenceStrategy extends BaseStrategy {
         cp >= 0.93 && cp <= 0.99 &&
         hoursToResolve > 2 && hoursToResolve <= 30 * 24
       ) {
+        // 2026-04-16 optimal-stopping filter (37% rule / Secretary Problem).
+        //
+        // Thesis: long_term_grind has been entering high-prob markets near
+        // the top of their drift (after most of the 7-30¢ move has already
+        // happened), so realized edge lags the Markov-grid model. Instead of
+        // entering on first sight, observe the first 37% of the resolve
+        // window and then only fire when the current price matches or beats
+        // the lowest price we observed in that window. Classical Secretary
+        // Problem optimum: observe N/e ≈ 37% of candidates, then take the
+        // first one that exceeds all observed.
+        //
+        // Observation record is per condition_id, keyed off first_seen_ms
+        // so that windows don't reset when the engine restarts mid-market
+        // (only total memory wipe on boot resets — acceptable since the
+        // gate becomes more permissive over time).
+        let obs = this.ltgObservations.get(m.condition_id);
+        if (!obs) {
+          obs = {
+            first_seen_ms: now,
+            initial_hours_to_resolve: hoursToResolve,
+            min_observed_price: cp,
+          };
+          this.ltgObservations.set(m.condition_id, obs);
+        } else {
+          if (cp < obs.min_observed_price) obs.min_observed_price = cp;
+        }
+        const elapsedHours = (now - obs.first_seen_ms) / (1000 * 60 * 60);
+        const observationPhaseHours = 0.37 * obs.initial_hours_to_resolve;
+        const pastObservationPhase = elapsedHours > observationPhaseHours;
+        const priceBeatsMin = cp <= obs.min_observed_price;
+        if (!pastObservationPhase || !priceBeatsMin) {
+          log.debug({
+            condition_id: m.condition_id,
+            cp,
+            min_observed_price: obs.min_observed_price,
+            elapsed_hours: +elapsedHours.toFixed(2),
+            observation_phase_hours: +observationPhaseHours.toFixed(2),
+            past_phase: pastObservationPhase,
+            price_beats_min: priceBeatsMin,
+          }, 'long_term_grind gated by optimal-stopping filter');
+          continue;
+        }
         // Markov calibration anchored on Becker's empirical grid for the
         // 93-99¢ zone. Grid values in this range: 0.93→~0.928, 0.95→0.9549,
         // 0.97→0.9733, 0.99→0.9915. Slight systematic underpricing on deep
@@ -192,6 +251,12 @@ export class ConvergenceStrategy extends BaseStrategy {
               scout_overlay_multiplier: ltgOverlay.multiplier,
               scout_overlay_reason: ltgOverlay.reason,
               scout_overlay_scout_id: ltgOverlay.scoutId,
+              // 2026-04-16 optimal-stopping audit fields
+              ltg_observation_first_seen_ms: obs.first_seen_ms,
+              ltg_observation_initial_hours: obs.initial_hours_to_resolve,
+              ltg_observation_min_price: obs.min_observed_price,
+              ltg_observation_elapsed_hours: elapsedHours,
+              ltg_observation_phase_hours: observationPhaseHours,
             },
             created_at: new Date(),
           });
@@ -214,6 +279,14 @@ export class ConvergenceStrategy extends BaseStrategy {
     const now = Date.now();
     for (const [key, ts] of this.recent.entries()) {
       if (now - ts > DEDUP_TTL_MS) this.recent.delete(key);
+    }
+    // 2026-04-16 observation cleanup: drop long_term_grind observation
+    // records older than the observation TTL (31d). Keeps the Map bounded
+    // on a long-lived engine without deleting windows still in use.
+    for (const [cid, obs] of this.ltgObservations.entries()) {
+      if (now - obs.first_seen_ms > LTG_OBSERVATION_TTL_MS) {
+        this.ltgObservations.delete(cid);
+      }
     }
   }
 }
