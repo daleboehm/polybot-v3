@@ -76,5 +76,24 @@ priority_scanner:
 scouts:
   enabled: true
   interval_ms: 60000
-  # 2026-04-12: all scouts active including leaderboard poller.
-  disabled_scouts: []
+  # 2026-04-16: llm-news-scout PARKED. Diagnosed 2026-04-15/16 with commits
+  # 550d6ad (coordinator observability) + 4be9bc1 (log-level bumps on the
+  # zero-findings path). Findings:
+  #   - API is reachable, Haiku is responding in ~3s with valid JSON.
+  #   - Every call returns {"findings": []}. Correct behavior given the
+  #     prompt ("only flag if there is a SPECIFIC, RECENT, NAMEABLE
+  #     catalyst in the last 2 hours") combined with the fact that we
+  #     feed the scout no news — just question text + category tag. It
+  #     has no way to KNOW about recent catalysts without inputs.
+  #   - Prompt caching is broken too: cache_read=0, cache_creation=0 on
+  #     every call. 1942 input_tokens is under Haiku's 2048-token cache
+  #     minimum, so the cache_control block silently no-ops.
+  # scout_intel has never held a row in the life of the engine. applyScoutOverlay
+  # has been returning NEUTRAL (1.0x) for all 8795 calls — strategies have been
+  # running unweighted. That's actually fine for clean P&L attribution; the
+  # kill verdict + rolling view + partnership commitments all worked without it.
+  # The overlay code is left in place (harmless NEUTRAL default) so we can
+  # re-enable when a real news feed is wired in. See docs/todo.md item for
+  # the wire-up plan (NewsAPI / Perplexity / web search scout).
+  disabled_scouts:
+    - llm-news-scout

@@ -142,5 +142,11 @@ priority_scanner:
 scouts:
   enabled: true
   interval_ms: 60000              # 60 seconds between ticks
-  # 2026-04-12: LeaderboardPollerScout ENABLED. All scouts active.
-  disabled_scouts: []
+  # 2026-04-16: llm-news-scout PARKED on both engines. See rd-default.yaml
+  # for full diagnosis notes. Short version: Haiku returns {"findings": []}
+  # every call because we feed the scout no news, just question text +
+  # category tag. The overlay code is left in place (returns NEUTRAL by
+  # default — harmless). Re-enable after wiring a real news feed
+  # (NewsAPI / Perplexity / web search) into the scout.
+  disabled_scouts:
+    - llm-news-scout
