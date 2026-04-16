@@ -208,7 +208,10 @@ export class LlmNewsScout extends ScoutBase {
     try {
       const findings = await this.callClaude(sample);
       if (findings.length === 0) {
-        this.log.debug({ evaluated: sample.length }, 'LLM returned no findings');
+        // 2026-04-15: bumped debug → info. With log_level=info in prod,
+        // the debug log was invisible — the scout silently returned
+        // zero for the entire life of the engine and we couldn't tell.
+        this.log.info({ evaluated: sample.length }, 'LLM returned no findings');
         return;
       }
 
@@ -457,14 +460,19 @@ Evaluate each. Return findings JSON.`;
     }
 
     // Log cache usage stats from the API response headers / usage field
-    // so we can validate the cache is actually hitting.
+    // so we can validate the cache is actually hitting. 2026-04-15:
+    // bumped debug → info. Fires once every 10 min (MIN_CALL_INTERVAL_MS)
+    // so log volume is trivial, but gives us proof the API is being
+    // called and the cache is hitting (10× cost reduction depends on it).
     if (response.usage) {
-      this.log.debug(
+      this.log.info(
         {
           input_tokens: response.usage.input_tokens,
           output_tokens: response.usage.output_tokens,
           cache_read_input_tokens: response.usage.cache_read_input_tokens,
           cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+          raw_findings: (Array.isArray(parsed.findings) ? parsed.findings.length : 0),
+          validated_findings: clean.length,
         },
         'Claude usage',
       );
