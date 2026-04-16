@@ -11,6 +11,7 @@ import type { Signal } from '../../types/index.js';
 import { baseRateCalibrator } from '../../validation/base-rate-calibrator.js';
 import { calibratedSideProb, preferredExecutionModeForTail } from '../../market/markov-calibration.js';
 import { applyScoutOverlay } from '../scout-overlay.js';
+import { scoreCasualness } from '../../market/sophistication-score.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 
@@ -115,15 +116,48 @@ export class FavoritesStrategy extends BaseStrategy {
       }
 
       // ─── sub: stratified_bias (40-60% range) ───
+      // 2026-04-16 Fix 5: market sophistication filter. stratified_bias was
+      // -$147 all-time (35.1% WR on 194 resolutions) because it fires on
+      // every 40-60% market regardless of whether the favorite-longshot
+      // bias is actually present. Academic consensus: the bias is 2-5% in
+      // LOW-VOLUME sports/entertainment markets and near-zero in
+      // sophisticated CLOB-heavy markets (crypto, major political). Gate
+      // the sub on `casual_score >= 2` — at least 2 of {low-volume,
+      // casual-category, long-horizon} must be true for the bias to be
+      // structurally present.
       if (
         this.isSubStrategyEnabled(ctx, 'stratified_bias') &&
         favoritePrice >= 0.40 && favoritePrice <= 0.60 &&
         hoursToResolve >= 2 && hoursToResolve <= 48
       ) {
-        const key = `stratified_bias:${market.condition_id}`;
-        if (!this.recentTrades.has(key)) {
-          signals.push(this.buildSignal(ctx, market, 'stratified_bias', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.5, usingCalibration, usingOwnCalibration, usingMarkovCalibration));
-          this.recentTrades.set(key, now);
+        const soph = scoreCasualness(market);
+        if (soph.casual_score < 2) {
+          log.debug({
+            condition_id: market.condition_id.substring(0, 14),
+            casual_score: soph.casual_score,
+            volume_casual: soph.volume_casual,
+            category_casual: soph.category_casual,
+            horizon_casual: soph.horizon_casual,
+            matched_category: soph.matched_category,
+          }, 'stratified_bias gated — market too sophisticated for bias trade');
+        } else {
+          const key = `stratified_bias:${market.condition_id}`;
+          if (!this.recentTrades.has(key)) {
+            const signal = this.buildSignal(ctx, market, 'stratified_bias', favoriteSide, favoriteTokenId, favoritePrice, payoff, modelProb, hoursToResolve, 0.5, usingCalibration, usingOwnCalibration, usingMarkovCalibration);
+            // Tag the sophistication breakdown for post-hoc analysis of how
+            // the filter is performing (are we still losing on 2-score markets?
+            // Should we raise to 3?)
+            signal.metadata = {
+              ...signal.metadata,
+              casual_score: soph.casual_score,
+              volume_casual: soph.volume_casual,
+              category_casual: soph.category_casual,
+              horizon_casual: soph.horizon_casual,
+              matched_category: soph.matched_category,
+            };
+            signals.push(signal);
+            this.recentTrades.set(key, now);
+          }
         }
       }
 
