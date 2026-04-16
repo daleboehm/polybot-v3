@@ -153,17 +153,34 @@ export class LongshotStrategy extends BaseStrategy {
       }
 
       // systematic_fade — any tail <20¢ (lowest priority)
+      //
+      // 2026-04-16 Kelly-boundary fix: the broad 0.80-0.98 fade range pools
+      // profitable 0.80-0.90 trades with unprofitable 0.90-0.98 trades where
+      // breakeven WR exceeds achievable WR. Two surgical gates:
+      //   1. Edge floor: require model edge ≥ 3¢ (filters dead-band entries
+      //      where calibrated edge is already small).
+      //   2. Size scaling: fadeKellyScale = (1 - fadePrice) / 0.20, clamped
+      //      to [0,1]. Scales sizing from full at 0.80 fade → zero at 1.00.
+      //      Absolute skip when scale is 0 (fadePrice ≥ 1.0 — not reachable
+      //      in practice but defensive).
+      // Applied to systematic_fade ONLY. bucketed_fade (5-20¢ tails) and
+      // news_overreaction_fade (10-20¢ tails) already have narrower
+      // implicit ranges and stay on the original sizing curve.
       if (
         this.isSubStrategyEnabled(ctx, 'systematic_fade') &&
         !firedThisCycle.has(m.condition_id)
       ) {
-        const key = `systematic_fade:${m.condition_id}`;
-        if (!this.recent.has(key)) {
-          signals.push(
-            this.buildFadeSignal(ctx, m, 'systematic_fade', fadeSide, fadeTokenId, fadePrice, tailPrice, modelProb, expectedEdge, 0.5, usingCalibration),
-          );
-          this.recent.set(key, Date.now());
-          firedThisCycle.add(m.condition_id);
+        const edgeForFilter = usingCalibration ? (Math.min(0.99, modelProb) - fadePrice) : expectedEdge;
+        const fadeKellyScale = Math.max(0, Math.min(1, (1 - fadePrice) / 0.20));
+        if (edgeForFilter >= 0.03 && fadeKellyScale > 0) {
+          const key = `systematic_fade:${m.condition_id}`;
+          if (!this.recent.has(key)) {
+            signals.push(
+              this.buildFadeSignal(ctx, m, 'systematic_fade', fadeSide, fadeTokenId, fadePrice, tailPrice, modelProb, expectedEdge, 0.5, usingCalibration, fadeKellyScale),
+            );
+            this.recent.set(key, Date.now());
+            firedThisCycle.add(m.condition_id);
+          }
         }
       }
     }
@@ -191,6 +208,10 @@ export class LongshotStrategy extends BaseStrategy {
     fallbackEdge: number,
     strength: number,
     usingCalibration: boolean,
+    // 2026-04-16 Kelly-boundary fix: optional size multiplier for
+    // systematic_fade (1.0 = full size, 0.0 = skip). Other subs call without
+    // this parameter and stay on the original sizing curve.
+    kellyScale: number = 1,
   ): Signal {
     const clampedModelProb = Math.min(0.99, modelProb);
     // Real edge = calibrated prob - market price. Fallback uses the heuristic
@@ -208,7 +229,10 @@ export class LongshotStrategy extends BaseStrategy {
     // gives a final multiplier of 1.5x, bounded by the risk engine's caps.
     const overlay = applyScoutOverlay(m.condition_id, fadeSide);
     const baseSize = 5;
-    const combinedMultiplier = biasMultiplier * overlay.multiplier;
+    // 2026-04-16 Kelly-boundary fix: kellyScale ∈ [0,1] throttles size at
+    // the fade-price boundary where breakeven WR is unreachable. systematic_fade
+    // passes (1 - fadePrice) / 0.20; other subs default to 1.0.
+    const combinedMultiplier = biasMultiplier * overlay.multiplier * kellyScale;
     const biasedSize = Math.max(1, Math.round(baseSize * combinedMultiplier * 100) / 100);
     // Phase A1 (2026-04-11): in the deep-tail dead-band zone (fadePrice > 0.95),
     // single-sided makers collect no reward score and eat concentrated adverse
@@ -242,6 +266,7 @@ export class LongshotStrategy extends BaseStrategy {
         scout_overlay_scout_id: overlay.scoutId,
         preferred_execution_mode: preferredExecMode,
         in_dead_band: fadePrice > 0.90,
+        kelly_scale: kellyScale,
       },
       created_at: new Date(),
     };
