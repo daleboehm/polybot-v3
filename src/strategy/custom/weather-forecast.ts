@@ -57,6 +57,13 @@ const CONFIG = {
   min_hours_to_resolve: 2,
   dedup_minutes: 240,
   forecast_cache_ttl_ms: 30 * 60 * 1000, // 30 min cache
+  // 2026-04-16 allocation boost: weather is the top R&D sub across all
+  // observed windows (highest resolved-PnL-per-trade). Bumping size 1.5x on
+  // all four weather subs to extract more per-signal from a strategy that's
+  // already profitable — edge structure (forecast skill vs. market pricing)
+  // is the limiting factor, not position count. Single multiplier knob so
+  // the whole boost reverts in one diff if weather degrades.
+  allocation_multiplier: 1.5,
 };
 
 export class WeatherForecastStrategy extends BaseStrategy {
@@ -191,8 +198,8 @@ export class WeatherForecastStrategy extends BaseStrategy {
           edge: Math.abs(score.edge),
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
-          recommended_size_usd: 15,
-          metadata: { ...baseMetadata, sub_strategy: 'single_forecast' },
+          recommended_size_usd: Math.round(15 * CONFIG.allocation_multiplier),
+          metadata: { ...baseMetadata, sub_strategy: 'single_forecast', allocation_multiplier: CONFIG.allocation_multiplier },
           created_at: new Date(),
         });
         this.recentTrades.set(market.condition_id, now);
@@ -221,8 +228,8 @@ export class WeatherForecastStrategy extends BaseStrategy {
           edge: Math.abs(score.edge),
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
-          recommended_size_usd: 8,
-          metadata: { ...baseMetadata, sub_strategy: 'same_day_snipe' },
+          recommended_size_usd: Math.round(8 * CONFIG.allocation_multiplier),
+          metadata: { ...baseMetadata, sub_strategy: 'same_day_snipe', allocation_multiplier: CONFIG.allocation_multiplier },
           created_at: new Date(),
         });
       }
@@ -250,8 +257,8 @@ export class WeatherForecastStrategy extends BaseStrategy {
           edge: Math.abs(score.edge),
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
-          recommended_size_usd: 12,
-          metadata: { ...baseMetadata, sub_strategy: 'next_day_horizon' },
+          recommended_size_usd: Math.round(12 * CONFIG.allocation_multiplier),
+          metadata: { ...baseMetadata, sub_strategy: 'next_day_horizon', allocation_multiplier: CONFIG.allocation_multiplier },
           created_at: new Date(),
         });
       }
@@ -291,8 +298,8 @@ export class WeatherForecastStrategy extends BaseStrategy {
               edge: Math.max(0.05, 0.5 - fadePrice) * (1 - ensemble.confidence),
               model_prob: Math.min(0.5, fadePrice + 0.15),
               market_price: fadePrice,
-              recommended_size_usd: 6,
-              metadata: { ...baseMetadata, sub_strategy: 'ensemble_spread_fade', faded_extreme: extremeYes ? 'YES' : 'NO' },
+              recommended_size_usd: Math.round(6 * CONFIG.allocation_multiplier),
+              metadata: { ...baseMetadata, sub_strategy: 'ensemble_spread_fade', faded_extreme: extremeYes ? 'YES' : 'NO', allocation_multiplier: CONFIG.allocation_multiplier },
               created_at: new Date(),
             });
           }
