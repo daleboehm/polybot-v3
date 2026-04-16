@@ -22,6 +22,9 @@ export class MarketCache {
       active: market.active,
       closed: market.closed,
       neg_risk: market.neg_risk,
+      // 2026-04-16 NegRisk arb scanner needs the family id for grouping —
+      // propagate it through from sampling-poller rather than losing it here.
+      neg_risk_market_id: market.neg_risk_market_id ?? null,
       token_yes_id: market.tokens[0].token_id,
       token_no_id: market.tokens[1].token_id,
       yes_price: market.tokens[0].price,

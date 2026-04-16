@@ -29,6 +29,11 @@ entities:
       - cross_market
       - macro_forecast
       - whale_copy
+      # 2026-04-16 Fix 3: NegRisk combinatorial arbitrage scanner. Starts live
+      # on R&D (paper only) so we can measure realized P&L across many
+      # families before risking prod capital. Families pass the arb filter when
+      # 3-25 members and Σ(YES) ∈ [0.85, 0.97]. Per-leg size $4.
+      - negrisk_arbitrage
       # value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/
       # whale_copy re-added 2026-04-16 during config-sync cleanup: it was only
       # present in /opt/polybot-v3-rd/config/ (manually edited post-rebuild, never

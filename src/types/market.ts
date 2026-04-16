@@ -50,6 +50,11 @@ export interface MarketData {
   active: boolean;
   closed: boolean;
   neg_risk: boolean;
+  // 2026-04-16 NegRisk arbitrage scanner: `neg_risk_market_id` groups all
+  // mutually-exclusive outcomes of a multi-outcome event (e.g., every
+  // candidate in a "who wins the election" family). Used by the NegRisk
+  // arbitrage strategy to detect sum-of-YES-prices violations.
+  neg_risk_market_id: string | null;
   token_yes_id: string;
   token_no_id: string;
   yes_price: number;

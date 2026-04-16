@@ -35,6 +35,7 @@ import { SportsbookFadeStrategy } from '../strategy/custom/sportsbook-fade.js';
 import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-divergence.js';
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
 import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
+import { NegRiskArbitrageStrategy } from '../strategy/custom/negrisk-arbitrage.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { FastCryptoEvaluator } from './fast-crypto-evaluator.js';
 import { OddsApiClient } from '../market/odds-api-client.js';
@@ -153,6 +154,14 @@ export class Engine {
     // the strategy loadable. See docs/todo.md WHALE ACTIVATION PLAYBOOK
     // for the full flip-on sequence.
     this.strategyRegistry.register(new WhaleCopyStrategy());
+
+    // 2026-04-16 Fix 3: NegRisk combinatorial arbitrage scanner. Groups active
+    // markets by neg_risk_market_id, fires one BUY signal per family member
+    // when the sum of YES prices sits in the [0.85, 0.97] arb zone (below 0.85
+    // is typically a family with implicit "none" outcome; above 0.97 leaves
+    // no margin after slippage). Per-leg size is intentionally small ($4) —
+    // the alpha is the basket-level risk-free payoff, not per-leg edge.
+    this.strategyRegistry.register(new NegRiskArbitrageStrategy());
 
     // Strategy advisor (must be after strategyRegistry is populated)
     this.strategyAdvisor = new StrategyAdvisor(config.advisor, this.entityManager, this.strategyRegistry);
