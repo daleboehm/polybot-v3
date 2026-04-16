@@ -128,13 +128,33 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
       if (sumYes < MIN_SUM_YES || sumYes > MAX_SUM_YES) continue;
       familiesInArbZone++;
 
-      // Expected edge per-leg: the aggregate arb profit is (1 - sumYes) over
-      // the whole basket. We attribute that proportionally to each leg so the
-      // risk engine's edge gate doesn't reject individual legs.
+      // Basket-level economics. An EXHAUSTIVE negrisk family guarantees
+      // exactly one leg resolves to $1.00, so the arb requires EQUAL SHARE
+      // COUNTS across every leg (NOT equal dollar amounts).
+      //
+      // Bug we're fixing (discovered 2026-04-16 post-deploy):
+      //   v1 of this strategy set `recommended_size_usd = DEFAULT_LEG_SIZE_USD`
+      //   uniformly across all legs. With equal dollars, share counts differ
+      //   by leg price — the winning leg determines payout and within the
+      //   fair-price assumption the expected payout exactly equals the cost.
+      //   The basket edge collapses to zero. You only capture the (1 − Σp)
+      //   edge when you buy the SAME number of shares on every leg.
+      //
+      // Correct math:
+      //   Let target_basket_usd = DEFAULT_LEG_SIZE_USD × N (roughly the size
+      //   v1 intended to spend). To buy equal shares and land on that basket
+      //   budget, target_shares_per_leg = target_basket_usd / sumYes. Per-leg
+      //   cost = target_shares_per_leg × leg_price. Guaranteed payout at
+      //   resolution = target_shares_per_leg × $1. Guaranteed profit =
+      //   target_shares × (1 − sumYes) = target_shares × basketEdge.
       const basketEdge = 1 - sumYes;
-      // Per-leg edge seen by risk engine — (1 - sumYes) / N is per-dollar;
-      // we present it as a signal-level edge = basketEdge since each leg's
-      // contribution to the payoff is determined by the family, not the leg.
+      const targetBasketUsd = DEFAULT_LEG_SIZE_USD * members.length;
+      const targetSharesPerLeg = targetBasketUsd / sumYes;
+      const guaranteedPayoutUsd = targetSharesPerLeg; // $1 × shares
+      const guaranteedProfitUsd = guaranteedPayoutUsd - targetBasketUsd;
+      // Per-leg edge seen by risk engine — the whole basket delivers a
+      // (1 − sumYes) return on cost. Every leg contributes to that same
+      // basket-level return, so we expose `basketEdge` as each leg's edge.
       const perLegEdge = basketEdge;
 
       log.info({
@@ -142,6 +162,9 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
         members: members.length,
         sum_yes: +sumYes.toFixed(4),
         basket_edge: +basketEdge.toFixed(4),
+        target_shares_per_leg: +targetSharesPerLeg.toFixed(2),
+        target_basket_usd: +targetBasketUsd.toFixed(2),
+        guaranteed_profit_usd: +guaranteedProfitUsd.toFixed(2),
       }, 'NegRisk arb family detected');
 
       for (const m of members) {
@@ -151,6 +174,9 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
         // / N) attributes the edge evenly; this is just a scorecard number
         // for the risk engine, the real edge is at the basket level.
         const modelProb = Math.min(0.99, m.yes_price! + basketEdge / members.length);
+        // Per-leg dollar size that keeps share count constant across the
+        // basket. Round to the nearest cent so we don't send odd precision.
+        const legSizeUsd = +(targetSharesPerLeg * m.yes_price!).toFixed(2);
 
         signals.push({
           signal_id: nanoid(),
@@ -165,7 +191,7 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
           edge: perLegEdge,
           model_prob: modelProb,
           market_price: m.yes_price!,
-          recommended_size_usd: DEFAULT_LEG_SIZE_USD,
+          recommended_size_usd: legSizeUsd,
           metadata: {
             question: m.question,
             sub_strategy: this.SUB_ID,
@@ -173,10 +199,20 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
             family_members: members.length,
             basket_sum_yes: +sumYes.toFixed(4),
             basket_edge: +basketEdge.toFixed(4),
-            basket_total_cost_usd: +(DEFAULT_LEG_SIZE_USD * members.length).toFixed(2),
-            basket_expected_profit_usd: +(basketEdge * DEFAULT_LEG_SIZE_USD).toFixed(2),
-            // Leg math — useful for post-hoc analysis of which legs drove P&L
+            basket_total_cost_usd: +targetBasketUsd.toFixed(2),
+            basket_expected_profit_usd: +guaranteedProfitUsd.toFixed(2),
+            target_shares_per_leg: +targetSharesPerLeg.toFixed(2),
+            // `bypass_sizer=true` tells position-sizer.ts to honor
+            // `recommended_size_usd` directly instead of running Kelly +
+            // weighter. NegRisk arb requires EQUAL SHARE COUNTS across every
+            // leg; Kelly would produce sizes ∝ 1/(1-p_i) which gives unequal
+            // shares and breaks the guaranteed-payout math. Hard caps, the
+            // 5-share minimum, and the liquidity bound still apply.
+            bypass_sizer: true,
+            // Leg math — useful for post-hoc analysis of which legs drove P&L.
             leg_price: m.yes_price!,
+            leg_size_usd: legSizeUsd,
+            leg_size_usd_proportional: true,
             leg_price_pct_of_basket: +(m.yes_price! / sumYes).toFixed(4),
           },
           created_at: new Date(),

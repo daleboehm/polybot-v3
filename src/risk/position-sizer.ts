@@ -42,21 +42,45 @@ export function calculatePositionSize(
     return { size_usd: 0, size_shares: 0, method: 'minimum' };
   }
 
-  // 1. Kelly-based sizing from the signal's edge
-  let sizeUsd = kellySize(
-    signal.model_prob,
-    signal.market_price,
-    limits.fractional_kelly,
-    tradingBalance,
-  );
+  // 2026-04-16 NegRisk arb bypass.
+  //
+  // Arbitrage strategies require exact, cross-leg-coordinated sizing that
+  // Kelly cannot produce. NegRisk combinatorial arb needs EQUAL share
+  // counts across every leg of a family; Kelly produces size_usd ∝
+  // 1/(1 − price), which gives unequal shares and breaks the guaranteed-
+  // payout math.
+  //
+  // Strategies opt in by setting `metadata.bypass_sizer = true` on the
+  // signal — the strategy is responsible for its own sizing logic. We
+  // still honor the hard caps and 5-share minimum below so a runaway
+  // strategy can't blow through limits, but Kelly / weighter / wash-penalty
+  // layers are skipped.
+  //
+  // Caveat: this bypasses the strategy weighter's cash-preservation role
+  // for the bypassed strategy. That's an explicit tradeoff — arb
+  // strategies have basket-level economics that the per-signal weighter
+  // doesn't understand.
+  const bypassSizer = signal.metadata?.bypass_sizer === true;
+
+  // 1. Kelly-based sizing from the signal's edge (unless bypass requested)
+  let sizeUsd = bypassSizer
+    ? (signal.recommended_size_usd ?? 0)
+    : kellySize(
+        signal.model_prob,
+        signal.market_price,
+        limits.fractional_kelly,
+        tradingBalance,
+      );
 
   // 2. Apply the strategy weight multiplier FIRST (before caps).
   //    The weighter is a cash-preservation device: keep all sub-strategies trading
   //    for coverage, reduce bet size on bad ones, amplify up to 2.0x for proven ones.
   //    See `strategy-weighter.ts` file header for the full framing.
   //    Passes entity_slug per audit A-P1-2 fix (2026-04-10) — cross-entity contamination.
+  //    Skipped for `bypassSizer` signals — arb strategies have basket-level
+  //    economics the weighter can't reason about.
   let stratWeight = 1.0;
-  if (strategyWeighter) {
+  if (strategyWeighter && !bypassSizer) {
     stratWeight = strategyWeighter.getWeight(
       signal.strategy_id,
       signal.sub_strategy_id,
@@ -75,7 +99,7 @@ export function calculatePositionSize(
   //     haircut on a suspicious market.
   let washMultiplier = 1.0;
   let washReason: string | null = null;
-  if (marketCache) {
+  if (marketCache && !bypassSizer) {
     const market = marketCache.get(signal.condition_id);
     if (market) {
       const penalty = washTradingMultiplier(market);
