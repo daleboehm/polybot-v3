@@ -30,8 +30,13 @@ Environment=POLYBOT_LIVE_MODE=false
 Environment=POLYBOT_LIVE_CONFIRM=false
 Environment=LOG_LEVEL=info
 Environment=DATABASE_PATH=/opt/polybot-v3-rd/data/rd.db
-Environment=CONFIG_PATH=/opt/polybot-v3-rd/config/rd-default.yaml
-Environment=ENTITIES_PATH=/opt/polybot-v3-rd/config/rd-entities.yaml
+# 2026-04-16 config-sync cleanup: CONFIG_PATH / ENTITIES_PATH now point at the
+# repo copy instead of a separately-maintained /opt/polybot-v3-rd/config/ dir.
+# Before the fix, R&D's config lived in its own path and had to be manually
+# re-synced on every deploy — drift silently disabled whale_copy, the LLM scout
+# yaml toggle, etc. Single source of truth: /opt/polybot-v3/config/.
+Environment=CONFIG_PATH=/opt/polybot-v3/config/rd-default.yaml
+Environment=ENTITIES_PATH=/opt/polybot-v3/config/rd-entities.yaml
 # DASHBOARD_USER and DASHBOARD_PASSWORD are loaded from /opt/polybot-v3-rd/.env
 # (see EnvironmentFile directive above). NEVER hardcoded here — the repo is
 # shared on GitHub and secrets must not be committed.

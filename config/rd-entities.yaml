@@ -28,4 +28,9 @@ entities:
       - sportsbook_fade
       - cross_market
       - macro_forecast
+      - whale_copy
       # value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/
+      # whale_copy re-added 2026-04-16 during config-sync cleanup: it was only
+      # present in /opt/polybot-v3-rd/config/ (manually edited post-rebuild, never
+      # committed). Env-var repoint to /opt/polybot-v3/config/ would have silently
+      # disabled it. Porting to repo as the single source of truth.
