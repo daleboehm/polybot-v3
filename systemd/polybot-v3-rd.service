@@ -11,7 +11,13 @@ Wants=network-online.target
 #   DASHBOARD_PASSWORD=<actual password>
 #   ODDS_API_KEY=...
 #   FRED_API_KEY=...
+#
 # EnvironmentFile values override any `Environment=` lines below with the same key.
+# 2026-04-16 landmine: .env MUST NOT set CONFIG_PATH or ENTITIES_PATH. The config-
+# sync cleanup below points those at the REPO config path, and an older .env copy
+# on the VPS was silently shadowing that with /opt/polybot-v3-rd/config/... which
+# no longer exists — R&D crashed on startup. If CONFIG_PATH/ENTITIES_PATH appear
+# in the .env on any deploy, strip them: `sed -i "/^CONFIG_PATH=/d; /^ENTITIES_PATH=/d" /opt/polybot-v3-rd/.env`
 EnvironmentFile=/opt/polybot-v3-rd/.env
 Type=simple
 User=root
