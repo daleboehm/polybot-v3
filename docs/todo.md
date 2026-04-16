@@ -10,6 +10,7 @@
 4. **DO NOT** start "rebuild" work on R1/R2/R3 items without verifying status first — those are done
 5. **DO NOT** `systemctl restart polybot-v3` as a "fresh start" — kill switch is not persisted, restart auto-resumes live trading into the broken longshot strategy. Use SIGUSR2 for deliberate release, and only after the recap-day gate list below is cleared.
 6. Check both engines are healthy: `ssh ... "curl -s http://localhost:9100/api/health"` and `http://localhost:9200/rd/api/health`
+7. **Config sync trap (2026-04-16):** `/opt/polybot-v3-rd/config/rd-default.yaml` is now a SYMLINK → `/opt/polybot-v3/config/rd-default.yaml` so repo edits propagate to R&D on git pull. Before 2026-04-16 it was a separate file that drifted silently — any scout/risk/config change you make to the repo but don't verify in R&D's logs got lost. If you ever find a scout or yaml change not taking effect on R&D, `ls -la /opt/polybot-v3-rd/config/` and re-link if needed. Backup of pre-symlink state at `rd-default.yaml.bak-20260416`.
 
 ## Recap-day gate list (BLOCKING any live redeploy)
 
