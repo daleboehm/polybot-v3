@@ -19,12 +19,18 @@ risk:
   max_position_usd: 10.00          # Smaller paper positions for broader coverage. $10K / $10 = 1000
                                    # slots, enough room for every sub-strategy to accumulate data
                                    # before cash binds.
+  # 2026-04-17: R&D has no portfolio cap — purpose is data collection, not capital
+  # preservation. Removing the 15% inherited-from-prod limit so long-dated
+  # convergence positions don't crowd out new strategy signals.
+  max_portfolio_exposure_pct: 1.0
   fractional_kelly: 0.25
   daily_loss_lockout_usd: 500.00   # High lockout — don't want R&D stopping itself
   stop_loss_pct: 0.20
   hard_stop_usd: 25.00
   profit_target_pct: 0.40
-  min_edge_threshold: 0.02
+  # 2026-04-17: Lowered from 0.02 — R&D purpose is signal data collection.
+  # High threshold was starving all strategies of data.
+  min_edge_threshold: 0.005
   min_hold_hours: 2
   min_hours_to_resolve: 1          # Dale 2026-04-10: only short-horizon positions to keep the
   max_hours_to_resolve: 48         # wheels spinning. 1-48h window enforced in strategy-context.
