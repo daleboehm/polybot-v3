@@ -50,6 +50,34 @@ export class StopLossMonitor {
     const holdHours = (Date.now() - openedAt) / (1000 * 60 * 60);
     const pastMinHold = holdHours >= this.limits.min_hold_hours;
 
+    // 2026-04-16 Fix 4: hold-to-settlement for directional weather subs.
+    // arXiv 2604.07355 (6 AI models, 57 days, real money) found that weather
+    // positions outperform when held to settlement — early exits lock in
+    // path-dependent losses from intra-day forecast volatility that typically
+    // mean-reverts by the resolution time. Our own R&D data corroborates:
+    // weather_forecast/single_forecast is the #1 P&L contributor across all
+    // strategies. We gate ALL non-emergency exits on directional weather
+    // positions so trailing-lock and stop-loss can't fire against them.
+    //
+    // Still honored on weather positions:
+    //   - profit_target (positive exit — good to take)
+    //   - hard_stop (catastrophic floor — independent safety net)
+    // Suppressed on weather directional subs:
+    //   - trailing_lock (early exit on a pullback)
+    //   - stop_loss (drawdown-triggered exit)
+    //
+    // ensemble_spread_fade is explicitly a low-confidence contrarian trade
+    // and gets normal exits. Other strategies are unaffected.
+    //
+    // V1 implementation: strategy-level rule. V2 will read a per-position
+    // `hold_to_settlement` flag from the positions table once the schema is
+    // migrated (the flag is set at signal time from ensemble confidence in
+    // weather-forecast.ts — see Fix 4).
+    const isWeatherHold =
+      pos.strategy_id === 'weather_forecast' &&
+      pos.sub_strategy_id !== 'ensemble_spread_fade' &&
+      pos.sub_strategy_id !== null;
+
     // Profit target (always active regardless of hold period)
     if (pnlPct >= this.limits.profit_target_pct) {
       return {
@@ -75,6 +103,7 @@ export class StopLossMonitor {
     const trailRetention = this.limits.trailing_retention_pct ?? 0.70;
     const peak = pos.peak_pnl_pct ?? 0;
     if (
+      !isWeatherHold && // Fix 4: weather directional subs hold to settlement
       trailRetention > 0 &&
       peak >= trailActivation &&
       pnlPct > 0 && // never exit at a loss
@@ -102,8 +131,9 @@ export class StopLossMonitor {
       };
     }
 
-    // Tiered stop loss (only after min hold period)
-    if (pastMinHold && pnlPct < 0) {
+    // Tiered stop loss (only after min hold period, and never on
+    // weather directional subs — Fix 4 hold-to-settlement).
+    if (!isWeatherHold && pastMinHold && pnlPct < 0) {
       const tierStop = this.getTieredStopPct(pos.avg_entry_price);
       const effectiveStop = tierStop ?? this.limits.stop_loss_pct;
 
