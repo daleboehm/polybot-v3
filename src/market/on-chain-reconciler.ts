@@ -324,6 +324,21 @@ export class OnChainReconciler {
     // positions and we don't need to track them going forward. They appear as
     // close_absent rows in the resolutions table via the matched-DB-position
     // close-absent path above, which is the correct accounting.
+    //
+    // 2026-04-16 P0-2 attribution fix: tag orphans with `reconciler_orphan`
+    // instead of NULL. Prior behavior dumped these into `strategy_id = NULL`,
+    // which made them indistinguishable from a strategy-attribution bug. Prod
+    // audit 2026-04-16 found 8 NULL positions + 5 unattributed trades worth
+    // -$18.12 — all reconciler orphans from crash-window inserts or
+    // wallet-external activity (positions the bot did not originate). Giving
+    // them a dedicated sentinel:
+    //   (a) makes v_strategy_performance cleanly separate orphans from
+    //       real strategy results,
+    //   (b) lets stop-loss exit attribution (engine.ts:832 fallback) fall
+    //       through to `stop_loss_monitor` on these without masking a bug,
+    //   (c) answers the "no kill-switch coverage" observation honestly —
+    //       the kill switch can only gate orders WE originate; orphans
+    //       arrive already-open and are caught here for bookkeeping.
     for (const pos of apiByAsset.values()) {
       try {
         const size = Number(pos.size);
@@ -341,8 +356,8 @@ export class OnChainReconciler {
           unrealized_pnl: 0,
           market_question: pos.title,
           market_slug: undefined,
-          strategy_id: undefined,
-          sub_strategy_id: undefined,
+          strategy_id: 'reconciler_orphan',
+          sub_strategy_id: 'on_chain_discovery',
           is_paper: false,
         });
         result.actions.push({ kind: 'insert_orphan', apiPosition: pos });
