@@ -1,6 +1,28 @@
-# Polybot V3 — Live Status
+# Polybot V3 --- Live Status
 
-**Updated: 2026-04-14** (R1-R3c rebuild verified complete, whale tracking active, consensus scanner deployed)
+**Updated: 2026-04-17** (R&D back online after 2-day outage; CTF V2 hard blocker confirmed; GitHub-only deploy)
+
+## TL;DR for a fresh Claude session
+
+**PROD IS HALTED.** Kill-switch has been active since 2026-04-13 (43.8% daily drawdown). Two hard blockers before any live redeploy:
+1. **CTF Exchange V2 migration** --- new order struct + Polymarket USD stablecoin (replaces USDC.e). All open orders cancelled at cutover. CLOB client must be updated first. See `docs/ctf-exchange-v2-migration-plan-2026-04-16.md`.
+2. **NULL strategy root cause** --- 5 trades, 0% WR, -$18.12 in unattributed positions (no kill-switch coverage). Query `positions WHERE strategy_id IS NULL`, find the code path, add guard.
+
+**R&D was down 2026-04-15 to 2026-04-17.** Root causes fixed 2026-04-17:
+- `max_portfolio_exposure_pct` was inheriting 0.15 from prod config. R&D had $2,351 deployed vs $1,227 cap. Fixed: explicit `1.0` override in `config/rd-default.yaml` (commit `0746c93`).
+- `min_edge_threshold: 0.02` was rejecting all signals (observed edges 0.003-0.004). Lowered to `0.005`.
+- Backfill/UMA-watch services were failing: `/opt/polybot-v3-rd/config/` did not exist after archive rename. Fixed: symlinks created pointing to `/opt/polybot-v3/config/`.
+- First cycle post-fix: 1,440 signals, 392 orders placed.
+
+**Deploy workflow changed 2026-04-17:** GitHub is the only edit path. No workstation clone. VPS pushes via SSH deploy key `~/.ssh/github_polybot_deploy`.
+
+**Research pipeline:** Nightly task `polybot-strategy-research` fires at 8:17 PM daily. Prior run (2026-04-17 03:47 UTC) generated a hallucinated report with fabricated P&L numbers --- replaced with vetted version. Vetting gate now in Claude memory. All 5 queued tweets processed and discarded (4 engagement bait / 1 paid ad / 1 unverifiable). Jua/EPT-2 weather adversary confirmed real.
+
+**Upcoming P0 actions (before prod redeploy):**
+- CTF Exchange V2 CLOB client update
+- NULL strategy diagnosis and guard
+- Disable weather_forecast permanently (move from protected to disabled in config)
+- Fix kill-switch schema (`halted_by` column missing from query)
 
 ## TL;DR for a fresh Claude session
 

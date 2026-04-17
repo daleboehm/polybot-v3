@@ -242,3 +242,78 @@ No exceptions. Audit every strategy in `src/strategy/custom/` after adding a new
 **Why**: Legacy ballast is not neutral. It grows audit scope, it hides latent runtime dependencies (like the `/opt/polybot` symlink chain), it gives attackers more attack surface, and it makes every future "what does this do?" question take longer to answer.
 
 **How to apply**: Any session that ships a v1 → v2 migration (or similar) MUST include a deletion commit in the same session OR a dated deletion reminder in `todo.md`. The deletion reminder must include: (1) file paths to remove, (2) any secret/credential relocation prerequisites, (3) a systemd/cron survey to catch auto-start references before the deletion. The rebuild plan's R3c cleanup gate exists for exactly this reason — don't defer it into the grave.
+
+## 2026-04-17 (R&D diagnosis + research pipeline + deploy workflow)
+
+### Lesson: Research pipeline output must be sourced from DB truth, never synthesized from memory.
+
+**What happened**: A prior nightly research pipeline run (polybot-strategy-research, 2026-04-16) produced a report with completely fabricated strategy numbers:
+- systematic_fade shown as "-$32" (actual DB value: -$4.19)
+- bucketed_fade shown as "+$42" (actual DB value: +$0.45)
+- weather_forecast described as "dominant edge strategy" (actual: worst-performing strategy in the fleet)
+
+The fabricated numbers were presented as findings and nearly drove strategy decisions that would have inverted the correct action (disable weather, not promote it).
+
+**Rule**: Every number, P&L figure, win rate, or edge metric in any research output MUST be tagged with its source at generation time:
+- [DB: query] -- directly from a live DB query
+- [EXT: url] -- from an external source with URL cited
+- [CALC: formula] -- computed from tagged inputs
+
+If the pipeline cannot produce a [DB:] tag for a strategy P&L value, it must omit that value rather than synthesize one from training context. "I don't have DB access in this context" is the correct output -- not a plausible-looking fabricated number.
+
+**How to apply**: Before presenting any research output: cross-check every strategy metric against a direct DB query. If the numbers don't match the DB, the entire research output is tainted -- rerun with DB-grounded sourcing.
+
+---
+
+### Lesson: X/Twitter prediction market content requires a 4-point vetting gate before ANY strategy action.
+
+**What happened**: Multiple pipeline runs incorporated X/Twitter prediction market content verbatim -- summarizing claims, extracting "strategies," and presenting them as actionable findings without vetting. Dale identified this as a confirmed contributor to trading losses: "So you took that information verbatim. That's how we continually get into trouble."
+
+**Rule**: For every X/Twitter item in any research queue, apply this gate FIRST and DO NOT proceed past a failed gate:
+1. Is there on-chain evidence linked? (wallet address, tx hash, Polymarket profile with trade history) -- if no, auto-deprioritize
+2. Is it labeled "Paid partnership"? -- Auto-discard immediately. Do not analyze further.
+3. Is the described strategy mechanically reproducible at Polybot position sizes ($10 max) and time horizons (1-48h)?
+4. Does the account have a documented, verifiable track record (not just outcome claims)?
+
+If all four are NO: DISCARD without deep analysis. The 2026-04-16 queue had 5 items -- 4 were discards. Only one (Jua/EPT-2 weather model) was credible, and that required verifying against published benchmarks rather than taking the tweet at face value.
+
+**How to apply**: Structure every queue item output as:
+  Gate 1 (on-chain): PASS/FAIL
+  Gate 2 (paid partnership): PASS/FAIL
+  Gate 3 (reproducible): PASS/FAIL
+  Gate 4 (track record): PASS/FAIL
+  Overall: CREDIBLE / WEAK SIGNAL / DISCARD
+Only CREDIBLE items feed into strategy recommendations.
+
+---
+
+### Lesson: R&D config must explicitly override ALL prod defaults -- never rely on inheritance.
+
+**What happened**: R&D engine stopped taking new positions for ~2 days (2026-04-15 to 17). Root cause was dual inheritance from prod defaults:
+1. max_portfolio_exposure_pct defaulted to 0.15 (15%) -- not set in rd-default.yaml. With $2,351 already deployed and equity at $8,183, the cap was $1,227 -- all new positions blocked.
+2. min_edge_threshold was 0.02 -- not set in rd-default.yaml. Observed signal edges were 0.0035-0.0038. Zero signals passed.
+
+**Rule**: rd-default.yaml must be SELF-DESCRIBING -- every parameter that differs from prod must be explicitly stated with a comment explaining why. Never leave an R&D-relevant parameter to inherit from default.yaml. Key R&D-specific overrides:
+- max_portfolio_exposure_pct: 1.0 (prod: 0.15) -- R&D collects data, not capital
+- min_edge_threshold: 0.005 (prod: 0.02) -- R&D needs positions at lower edge to measure win rates
+- max_position_usd: 10.00 -- smaller paper positions for broader coverage
+- daily_loss_lockout_usd: 500.00 -- R&D should not self-halt
+
+**How to apply**: Any time a new risk parameter is added to config/default.yaml, immediately evaluate whether R&D needs a different value and add it to rd-default.yaml in the same commit.
+
+---
+
+### Lesson: GitHub is the ONLY edit path. No workstation clone. VPS pushes via SSH deploy key.
+
+**What happened**: The deploy workflow accumulated confusion across sessions -- docs referenced "edit workstation src/ -> scp to VPS" (deprecated). Attempts to push from VPS failed because remote was HTTPS with no stored credentials. User corrected twice: "Everything gets done on Github" and "You are the one that pushes everything to the VPS."
+
+**Current deploy flow (canonical as of 2026-04-17)**:
+1. Edit: Claude edits files via SSH directly on the VPS, then commits from VPS
+2. Push: VPS uses SSH deploy key at ~/.ssh/github_polybot_deploy; remote is git@github.com:daleboehm/polybot-v3.git
+3. Build: cd /opt/polybot-v3 && npm run build
+4. R&D sync: rsync -a --delete dist/ /opt/polybot-v3-rd/dist/
+5. Restart: systemctl restart polybot-v3-rd (prod remains halted)
+
+**Rule**: There is NO workstation clone. Any reference to "edit on workstation" or "scp to VPS" is stale and wrong. Claude handles all VPS deployments. Dale directs changes in chat; Claude executes them on the VPS.
+
+**How to apply**: When editing source files, make the change via SSH on /opt/polybot-v3/src/, commit and push via the deploy key, then rebuild and restart. VPS-only. Never reference a local workstation path for code.

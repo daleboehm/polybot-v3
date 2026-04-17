@@ -12,6 +12,25 @@
 6. Check both engines are healthy: `ssh ... "curl -s http://localhost:9100/api/health"` and `http://localhost:9200/rd/api/health`
 7. **Config sync — FIXED PROPERLY 2026-04-16 via env var repoint.** R&D's systemd unit `/etc/systemd/system/polybot-v3-rd.service` now has `Environment=CONFIG_PATH=/opt/polybot-v3/config/rd-default.yaml` and `Environment=ENTITIES_PATH=/opt/polybot-v3/config/rd-entities.yaml` — pointing DIRECTLY at the repo. The tracked unit copy in `systemd/polybot-v3-rd.service` matches. Single source of truth: `/opt/polybot-v3/config/`. Old `/opt/polybot-v3-rd/config/` dir archived. Earlier in the day we tried a symlink as an interim fix; env-var repoint is the real solution because (a) matches how prod already loads, (b) no FS state to drift, (c) visible in `systemctl cat`. Historical: before the fix, `/opt/polybot-v3-rd/config/rd-default.yaml` and `rd-entities.yaml` were separate physical files — changes to the repo copy never reached R&D. Silent drift disabled `whale_copy` for days until the cleanup sweep surfaced it.
 
+
+## 2026-04-17 Session Summary
+
+**R&D engine fixed** (was down since 2026-04-15, all signals rejected):
+- `max_portfolio_exposure_pct: 1.0` added to `rd-default.yaml` — R&D had $2,351 deployed vs $1,227 cap (inherited 0.15 from prod)
+- `min_edge_threshold` lowered 0.02 → 0.005 — all signals were below the old threshold
+- `/opt/polybot-v3-rd/config/` symlinks created — backfill + UMA-watch were crashing without them
+- First cycle post-fix: 1,440 signals, 392 orders placed
+- Commit `0746c93` pushed to GitHub via new SSH deploy key `~/.ssh/github_polybot_deploy`
+
+**Research pipeline hardened:**
+- Prior run (04-17 03:47 UTC) had hallucinated P&L numbers in report. Vetted replacement written.
+- 5 queued tweets processed: 4 discarded, 1 credible (Jua/EPT-2 confirms weather adversary thesis)
+- 4-point X/Twitter vetting gate added to Claude memory — required before any social content enters strategy
+
+**Deploy workflow:** GitHub-only (no workstation clone). VPS remote switched to SSH.
+
+**New gate items added: G7 (CTF V2), G8 (NULL strategy), G9 (weather disable + kill-switch schema).**
+
 ## Recap-day gate list (BLOCKING any live redeploy)
 
 Prod is kill-switch halted since 2026-04-13 13:36 UTC on 43.8% daily drawdown. When fresh USDC arrives, the following must be cleared IN ORDER before SIGUSR2 release. Nothing in "Next actionable work" below runs live until this list is green.
@@ -108,6 +127,35 @@ $20 abs cap is correct for $257 seed but too tight for $1K+:
 
 ### G6. SIGUSR2 release (NOT systemctl restart)
 Only after G1-G5 are green. `kill -USR2 $(systemctl show polybot-v3 -p MainPID --value)`. Restart would auto-resume live trading immediately because the kill switch is not persisted.
+### G7. CTF Exchange V2 CLOB client update — NEW HARD BLOCKER
+
+Polymarket is migrating to CTF Exchange V2: new order struct, new stablecoin (Polymarket USD replaces USDC.e).
+All open orders are cancelled at cutover. Any prod redeploy before the CLOB client is updated will place
+orders against the wrong contract version.
+
+See `docs/ctf-exchange-v2-migration-plan-2026-04-16.md`. This gate blocks G6.
+
+### G8. NULL strategy root cause + guard — NEW
+
+5 prod positions have no `strategy_id` in the DB. Lost -$18.12 total (-$3.62 avg), zero kill-switch coverage.
+
+```sql
+SELECT id, strategy_id, sub_strategy_id, status, pnl, opened_at
+FROM positions WHERE strategy_id IS NULL OR strategy_id = 
+ORDER BY opened_at DESC LIMIT 20;
+```
+
+Find the code path creating unattributed positions and add an assert/throw before the DB write.
+
+### G9. Disable weather_forecast + fix kill-switch schema — NEW
+
+1. Move `weather_forecast` from `protected_strategies` to `disabled_strategies` in `config/default.yaml`.
+   Evidence: -$10.41 all-time (worst strategy), structural adversary (Jua/EPT-2 AI weather model) confirmed.
+
+2. Fix kill-switch schema: `SELECT halted_by` fails — column missing. Either `ALTER TABLE kill_switch_state
+   ADD COLUMN halted_by TEXT` or remove `halted_by` from the query in `kill-switch-repo.ts`.
+
+
 
 ### Prod exit hatch (decoupled from G1-G6)
 

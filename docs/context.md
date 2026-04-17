@@ -1,6 +1,6 @@
 # Polybot V3 — Architecture Context
 
-**Updated: 2026-04-14** (R1-R3c complete, whale tracking live, consensus scanner deployed)
+**Updated: 2026-04-17** (CTF V2 blocker; R&D fixed 2026-04-17; GitHub-only deploy; tweet vetting gate)
 
 ## Quick resume for any Claude session
 
