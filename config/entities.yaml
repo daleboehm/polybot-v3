@@ -35,6 +35,23 @@ entities:
     # Switch favorites from whole-strategy to sub_strategy_ids allow-list
     # so we can explicitly exclude stratified_bias without touching the
     # strategy code.
+    #
+    # 2026-04-16 G3: longshot DISABLED on prod pending R&D validation.
+    # R&D `systematic_fade` shows the WR-vs-PnL paradox (86.7% WR, -$33 PnL)
+    # — high-win-rate + negative P&L is a classic Kelly-at-price-extremes
+    # blowup. Prod drew down 80% in 8 days on the same code R&D ran flat.
+    # Re-enable after: (a) Fix 1 (Kelly boundary fix) ships, (b) R&D Wilson
+    # LB ≥ 0.50 on ≥50 resolved trades, and (c) new recap-day position
+    # caps are in place. Until then: NO `longshot` on prod.
+    #
+    # 2026-04-16 Fix 2: convergence.long_term_grind DISABLED on prod.
+    # Single largest correlated-position risk in R&D (277 open, 5.9d avg
+    # age). Existing prod convergence positions resolve naturally; no
+    # new entries until sopersone's optimal-stopping filter ships.
+    #
+    # 2026-04-16 Fix 4: weather_forecast is the #1 P&L contributor
+    # (+$316 all-time, +$180 on 2026-04-16). Keep enabled. Capital
+    # doubling is handled via strategy-weighter config (not here).
     strategies:
       - weather_forecast
       - crypto_price
@@ -43,8 +60,8 @@ entities:
           - compounding
           - near_snipe
           - fan_fade
-      - longshot
-      - convergence
+      # - longshot            # DISABLED 2026-04-16 G3 — see comment above
+      # - convergence         # DISABLED 2026-04-16 Fix 2 — see comment above
       # 2026-04-12: sportsbook_fade DISABLED after 24h review.
       # 14 resolutions, 0 wins, 1 loss, -$1.05. The Odds API feed
       # is not producing edge on sports markets. Re-enable after

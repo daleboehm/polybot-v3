@@ -8,32 +8,40 @@ engine:
 
 risk:
   # ═══════════════════════════════════════════════════════════════════
-  # SPRINT MODE (2026-04-11, Dale's directive):
-  # Bankroll is $257, debt-pressured, running a sprint to flush the
-  # account so it can fund other entities for debt repayment. Marathon-
-  # era risk caps (envelope, cluster) are DISABLED here — they were
-  # preventing the engine from compounding its best strategies. The
-  # NO-LOSE mantra (hold to resolution, never force-exit) is still in
-  # effect, so "over-concentration" has no real downside in this phase.
+  # RECAP MODE (2026-04-16, Dale's directive, G4):
+  # Prior sprint-mode caps were sized for the $257 debt-pressured
+  # bankroll and blew up on 2026-04-13 (43.8% daily drawdown, correlated
+  # longshot cluster). Recap-day caps are the marathon-era values
+  # scaled to the new seed.
   #
-  # Re-enable these when bankroll > ~$5K and you want drawdown
-  # discipline more than compounding speed:
-  #   max_strategy_envelope_pct: 0.25
-  #   max_cluster_pct: 0.15
+  # Recap-contingent caps (set the one that matches the deposit amount
+  # BEFORE releasing the kill switch with `kill -USR2`):
+  #   $1K recap: max_position_usd 100.00 / max_position_pct 0.10 (ACTIVE)
+  #   $2K recap: max_position_usd 200.00 / max_position_pct 0.10
+  #   $5K recap: max_position_usd 250.00 / max_position_pct 0.05
+  # The per-position pct cap tightens as bankroll grows so a single
+  # mispriced market can't dominate the book.
+  #
+  # The envelope + cluster + portfolio-exposure caps are REARMED here
+  # as the outer guardrails (sprint mode had them disabled). Portfolio
+  # exposure of 0.15 saved prod from a deeper blowup on 4/13 — it stays.
+  #
+  # To re-enter sprint mode after a successful recap compounding run,
+  # move the above to documentation and loosen these dials deliberately,
+  # with a written pre-commit in this comment block.
   # ═══════════════════════════════════════════════════════════════════
-  max_position_pct: 0.25          # 25% of equity per position (was 10% marathon)
-  max_position_usd: 40.00         # absolute per-position cap (was 20 marathon)
-  fractional_kelly: 0.50          # half-Kelly for faster compounding (was 0.25)
-  daily_loss_lockout_usd: 20.00   # still active — single-day catastrophic floor
-  stop_loss_pct: 0.20             # still configured; NO-LOSE policy never stops
-  hard_stop_usd: 5.00             # per-position catastrophic floor
+  max_position_pct: 0.10          # 10% of equity per position (marathon, RE-TIGHTENED from sprint 0.25)
+  max_position_usd: 100.00        # absolute per-position cap — sized for $1K recap
+  fractional_kelly: 0.25          # quarter-Kelly (RE-TIGHTENED from sprint 0.50) — see Fix 1 re: stability
+  daily_loss_lockout_usd: 50.00   # catastrophic floor — raised from $20 so one bad day doesn't halt on $1K
+  stop_loss_pct: 0.20
+  hard_stop_usd: 5.00
   profit_target_pct: 0.40
-  # Sprint mode: no per-strategy and no per-cluster caps
-  max_strategy_envelope_pct: 0.0  # DISABLED for sprint
-  max_cluster_pct: 0.0            # DISABLED for sprint
+  max_strategy_envelope_pct: 0.25 # RE-ENABLED for recap (was 0.0 sprint)
+  max_cluster_pct: 0.15           # RE-ENABLED for recap (was 0.0 sprint)
   # G2 (2026-04-15): portfolio-wide total-exposure cap — orthogonal to
-  # envelope/cluster. Set explicitly here so the knob is auditable.
-  # Tune this at recap-day G5 when the deposit amount is known.
+  # envelope/cluster. The outer guardrail. Saved prod from a deeper
+  # blowup 2026-04-13. NEVER disable this without an incident.
   max_portfolio_exposure_pct: 0.15  # 15% of equity across ALL open positions
   # Trailing profit lock still active — captures more on runners
   trailing_activation_pct: 0.20
@@ -76,6 +84,19 @@ api:
   data_api_base_url: https://data-api.polymarket.com
   ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
   rate_limit_per_second: 10
+  # 2026-04-16 CTF Exchange V2 scaffolding. Polymarket announced 2026-04-06 a
+  # full upgrade: new Exchange contract (0xE1111800...), new order struct
+  # (adds `timestamp`/`metadata`/`builder`, removes `taker`/`feeRateBps`/`nonce`),
+  # and native stablecoin pUSD replacing bridged USDC.e. Rollout window
+  # ~2026-04-20 to 2026-04-27 with ≥1 week notice before the hard flip.
+  #
+  # This flag currently does NOTHING — V1 is the only implementation wired
+  # into clob-router.ts. Scaffold only. On cutover day we add the V2 client
+  # behind the same flag and flip `v1` → `v2`.
+  #
+  # Full migration plan + code-change checklist:
+  #   docs/ctf-exchange-v2-migration-plan-2026-04-16.md
+  exchange_version: v1
 
 dashboard:
   port: 9100
