@@ -62,7 +62,17 @@ export function calculatePositionSize(
   // doesn't understand.
   const bypassSizer = signal.metadata?.bypass_sizer === true;
 
-  // 1. Kelly-based sizing from the signal's edge (unless bypass requested)
+  // 1. Kelly-based sizing from the signal's edge (unless bypass requested).
+  //
+  // 2026-04-16 Fix 1: per-signal probability uncertainty. Strategies that
+  // know their own calibration error (e.g., `systematic_fade` operating
+  // at price extremes) can set `metadata.prob_uncertainty` and Kelly
+  // shrinks the input probability by that amount before sizing. Pairs
+  // with the α-boundary correction inside `kellySize` which clamps
+  // fullKelly to `alphaMax` when marketPrice is in the extreme bands.
+  const probUncertainty = typeof signal.metadata?.prob_uncertainty === 'number'
+    ? signal.metadata.prob_uncertainty
+    : 0;
   let sizeUsd = bypassSizer
     ? (signal.recommended_size_usd ?? 0)
     : kellySize(
@@ -70,6 +80,7 @@ export function calculatePositionSize(
         signal.market_price,
         limits.fractional_kelly,
         tradingBalance,
+        { probUncertainty },
       );
 
   // 2. Apply the strategy weight multiplier FIRST (before caps).

@@ -267,6 +267,18 @@ export class LongshotStrategy extends BaseStrategy {
         preferred_execution_mode: preferredExecMode,
         in_dead_band: fadePrice > 0.90,
         kelly_scale: kellyScale,
+        // 2026-04-16 Fix 1: per-signal probability uncertainty. Position
+        // sizer shrinks model_prob by this amount before running Kelly
+        // (see utils/math.ts α-boundary correction + position-sizer.ts).
+        // systematic_fade runs at extreme fade prices (0.80-0.98) where
+        // the 86.7%/-$33 paradox means observed WR is ~2-8 points BELOW
+        // market-implied — so model_prob is systematically overstated.
+        // Shrinking the Kelly input by 0.03 prevents the formula from
+        // sizing into negative-EV territory on the strategy's own error.
+        // bucketed_fade and news_overreaction_fade are already
+        // constrained to tail-price 0.05-0.20 (fade price 0.80-0.95) and
+        // don't need the extra shrinkage.
+        prob_uncertainty: subStrategyId === 'systematic_fade' ? 0.03 : 0,
       },
       created_at: new Date(),
     };
