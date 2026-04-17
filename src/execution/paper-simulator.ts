@@ -82,25 +82,14 @@ export class PaperSimulator {
 
     const fillSize = order.remaining_size;
     const usdcSize = roundTo(fillPrice * fillSize, 4);
-    // Fee model: HARD-CODED 0 per the second 2026-04-10 fix.
-    //
-    // History:
-    //   v1 → v2:  hardcoded 0.02 (2%) → drained paper cash on every fill.
-    //   2026-04-10 morning fix: read `market.taker_fee` from cache "because Polymarket's
-    //     mainnet taker fee is 0 today and reading keeps paper symmetric with live."
-    //   2026-04-10 afternoon: discovered Polymarket's CLOB API returns `taker_base_fee`
-    //     as a scaled integer (1000 for 1641 of 6288 markets, 0 for the rest). The
-    //     morning fix multiplied that raw integer by usdcSize, producing a $51,479 fee
-    //     on a $51 trade. R&D paper cash drained to 0 in one cycle, daily-loss-guard
-    //     fired 100% drawdown, kill switch halted prod. Singapore/Kuala Lumpur weather
-    //     positions ended up with $13K-$51K bogus cost basis before the halt.
-    //
-    // Polymarket's actual mainnet CLOB taker fee IS zero today. Until the correct
-    // scaling factor for `taker_base_fee` is verified (bps? tenths of bps? percent?),
-    // this site hard-codes 0 to match live execution. When Polymarket turns fees on,
-    // update this after verifying the scale against a known fee value from the docs.
-    const feeRate = 0;
-    const feeUsdc = roundTo(usdcSize * feeRate, 4);
+    // Fee model: Polymarket taker fees (live since 2026-03-30).
+    // Formula: fee = shares × feeRate × price × (1 − price).
+    // feeRate is the category coefficient from the CLOB API's taker_base_fee.
+    // Safety: if the raw value is > 0.5, it's the old scaled-integer bug — clamp to 0.
+    // History: see clob-router.ts for the full $51K fee bug post-mortem.
+    const rawFeeRate = market?.taker_fee ?? 0;
+    const safeFeeRate = rawFeeRate > 0.5 ? 0 : rawFeeRate;
+    const feeUsdc = roundTo(fillSize * safeFeeRate * fillPrice * (1 - fillPrice), 4);
     const netUsdc = order.side === 'BUY'
       ? roundTo(usdcSize + feeUsdc, 4)     // buying costs more
       : roundTo(usdcSize - feeUsdc, 4);    // selling nets less

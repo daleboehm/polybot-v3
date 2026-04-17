@@ -131,6 +131,77 @@ export function calculateEdge(modelProb: number, marketPrice: number): number {
   return modelProb - marketPrice;
 }
 
+// ─── Polymarket taker fee model (live since 2026-03-30) ─────────────
+//
+// Formula: fee_per_share = feeRate × p × (1 − p)
+// where p = share price (probability 0-1), feeRate = category coefficient.
+// Parabolic curve: peaks at p=0.50, zero at extremes. Taker-only; makers = 0.
+// Source: Polymarket docs + CLOB API /fee-rate endpoint.
+
+export const POLYMARKET_FEE_RATES: Record<string, number> = {
+  crypto: 0.072,
+  mentions: 0.0624,
+  economics: 0.060,
+  culture: 0.050,
+  weather: 0.050,
+  finance: 0.040,
+  politics: 0.040,
+  tech: 0.040,
+  sports: 0.030,
+  geopolitics: 0,
+};
+
+/**
+ * Look up fee rate for a market by its tags. Falls back to 0 (conservative:
+ * if we can't determine the category, assume no fee — the risk engine's
+ * min_edge gate is the backstop).
+ */
+export function getFeeRateFromTags(tags: string[]): number {
+  if (!tags?.length) return 0;
+  const lower = tags.map(t => t.toLowerCase());
+  for (const tag of lower) {
+    if (tag in POLYMARKET_FEE_RATES) return POLYMARKET_FEE_RATES[tag];
+  }
+  return 0;
+}
+
+/**
+ * Calculate taker fee per share at a given price.
+ * fee_per_share = feeRate × p × (1 − p)
+ */
+export function takerFeePerShare(feeRate: number, price: number): number {
+  return feeRate * price * (1 - price);
+}
+
+/**
+ * Fee-adjusted edge: raw edge minus the fee drag as a fraction of cost basis.
+ * For a BUY at price p, fee drag = feeRate × (1 − p).
+ * For a SELL at price p, fee drag = feeRate × p.
+ * Returns the edge net of fees — negative means the trade is unprofitable.
+ */
+export function feeAdjustedEdge(
+  modelProb: number,
+  marketPrice: number,
+  feeRate: number,
+): number {
+  const rawEdge = modelProb - marketPrice;
+  if (feeRate <= 0) return rawEdge;
+
+  // Fee per share = feeRate * p * (1-p). Cost basis per share = p (for BUY).
+  // Fee as fraction of cost = feeRate * (1-p). Subtract from |edge|.
+  const feeDrag = feeRate * marketPrice * (1 - marketPrice) / marketPrice;
+  // feeDrag simplifies to feeRate * (1-p) for buys
+
+  if (rawEdge >= 0) {
+    // BUY signal: edge must exceed fee drag
+    return rawEdge - feeDrag;
+  } else {
+    // SELL/NO signal: symmetrically, fee drag on selling at (1-p)
+    const sellFeeDrag = feeRate * marketPrice * (1 - marketPrice) / (1 - marketPrice);
+    return rawEdge + sellFeeDrag; // rawEdge is negative, sellFeeDrag reduces magnitude
+  }
+}
+
 /**
  * Round to N decimal places
  */

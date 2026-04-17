@@ -6,7 +6,8 @@ import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal, MarketData } from '../../types/index.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
-import { getNWSForecast, getEnsembleSpread } from '../../market/data-feeds.js';
+import { getNWSForecast, getEnsembleSpread, getMETARObservation } from '../../market/data-feeds.js';
+import { getFeeRateFromTags, feeAdjustedEdge } from '../../utils/math.js';
 
 const log = createChildLogger('strategy:weather');
 
@@ -153,8 +154,31 @@ export class WeatherForecastStrategy extends BaseStrategy {
       // Get ECMWF ensemble spread for confidence adjustment
       const ensemble = await getEnsembleSpread(parsed.city);
 
+      // Get METAR airport observation (actual ground truth temperature)
+      // METAR is the single most valuable data source for <6h markets —
+      // it tells us the CURRENT temp, which narrows the forecast window
+      // dramatically. For same-day markets, if current temp is already
+      // above/below the threshold, the probability shifts hard.
+      const metar = await getMETARObservation(parsed.city);
+      if (metar && metar.temp_f > 0 && hoursToResolve < 12) {
+        // Blend METAR actual temp with forecast — weight METAR higher for
+        // shorter horizons because current temp constrains the range.
+        const metarWeight = hoursToResolve < 3 ? 0.7 : hoursToResolve < 6 ? 0.5 : 0.3;
+        forecast.high_f = forecast.high_f * (1 - metarWeight) + metar.temp_f * metarWeight;
+        forecast.high_c = (forecast.high_f - 32) * 5 / 9;
+      }
+
       // Score the market (shared across all sub-strategies)
       const score = this.scoreMarket(market, parsed, forecast, hoursToResolve);
+
+      // Fee-adjusted edge: subtract taker fee drag from raw edge.
+      // Weather category feeRate = 0.050 → max 1.25% at p=0.50.
+      const feeRate = getFeeRateFromTags(market.tags ?? []);
+      const adjEdge = feeAdjustedEdge(
+        score.edge > 0 ? score.yesProbability : (1 - score.yesProbability),
+        score.edge > 0 ? market.yes_price : market.no_price,
+        feeRate,
+      );
 
       // Determine trade side from scoring model
       const scoredSide = score.edge > 0 ? 'YES' : 'NO';
@@ -189,7 +213,13 @@ export class WeatherForecastStrategy extends BaseStrategy {
         nws_low: nws?.low_f,
         ensemble_spread: ensemble?.spread,
         ensemble_confidence: ensemble?.confidence,
-        data_sources: [nws ? 'NWS' : null, 'Open-Meteo', ensemble ? 'ECMWF-Ensemble' : null].filter(Boolean),
+        metar_temp_f: metar?.temp_f,
+        metar_icao: metar?.icao,
+        metar_obs_time: metar?.observation_time,
+        fee_rate: feeRate,
+        raw_edge: Math.abs(score.edge),
+        fee_adjusted_edge: adjEdge,
+        data_sources: [nws ? 'NWS' : null, 'Open-Meteo', ensemble ? 'ECMWF-Ensemble' : null, metar ? 'METAR' : null].filter(Boolean),
         hold_to_settlement: holdToSettlement,
       };
 
@@ -204,7 +234,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
         this.isSubStrategyEnabled(ctx, 'single_forecast') &&
         hoursToResolve >= 2 && hoursToResolve <= 48 &&
         score.total >= singleMinScore &&
-        Math.abs(score.edge) >= CONFIG.min_edge
+        adjEdge >= CONFIG.min_edge
       ) {
         signals.push({
           signal_id: nanoid(),
@@ -216,7 +246,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
           side: 'BUY',
           outcome: scoredSide as 'YES' | 'NO',
           strength: Math.min(1, score.total / 100),
-          edge: Math.abs(score.edge),
+          edge: adjEdge,
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
           recommended_size_usd: Math.round(15 * CONFIG.allocation_multiplier),
@@ -234,7 +264,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
         this.isSubStrategyEnabled(ctx, 'same_day_snipe') &&
         hoursToResolve >= 0.5 && hoursToResolve < 6 &&
         score.total >= 70 &&
-        Math.abs(score.edge) >= 0.03
+        adjEdge >= 0.03
       ) {
         signals.push({
           signal_id: nanoid(),
@@ -246,7 +276,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
           side: 'BUY',
           outcome: scoredSide as 'YES' | 'NO',
           strength: 0.95,
-          edge: Math.abs(score.edge),
+          edge: adjEdge,
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
           recommended_size_usd: Math.round(8 * CONFIG.allocation_multiplier),
@@ -263,7 +293,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
         this.isSubStrategyEnabled(ctx, 'next_day_horizon') &&
         hoursToResolve >= 18 && hoursToResolve <= 30 &&
         score.total >= 50 &&
-        Math.abs(score.edge) >= 0.04
+        adjEdge >= 0.04
       ) {
         signals.push({
           signal_id: nanoid(),
@@ -275,7 +305,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
           side: 'BUY',
           outcome: scoredSide as 'YES' | 'NO',
           strength: Math.min(1, score.total / 100),
-          edge: Math.abs(score.edge),
+          edge: adjEdge,
           model_prob: scoredModelProb,
           market_price: scoredMarketPrice,
           recommended_size_usd: Math.round(12 * CONFIG.allocation_multiplier),
@@ -315,8 +345,8 @@ export class WeatherForecastStrategy extends BaseStrategy {
               strength: 0.5,
               // Edge: if ensemble says 50/50 and market prices discounted side at 10%,
               // naive fair value is 50%, so edge ~40%. We apply a haircut because
-              // ensemble confidence <40% doesn't mean true prob is 50%.
-              edge: Math.max(0.05, 0.5 - fadePrice) * (1 - ensemble.confidence),
+              // ensemble confidence <40% doesn't mean true prob is 50%. Then subtract fee drag.
+              edge: Math.max(0, Math.max(0.05, 0.5 - fadePrice) * (1 - ensemble.confidence) - (feeRate * (1 - fadePrice))),
               model_prob: Math.min(0.5, fadePrice + 0.15),
               market_price: fadePrice,
               recommended_size_usd: Math.round(6 * CONFIG.allocation_multiplier),
@@ -331,7 +361,9 @@ export class WeatherForecastStrategy extends BaseStrategy {
         market: market.question.substring(0, 60),
         city: parsed.city,
         score: score.total,
-        edge: (score.edge * 100).toFixed(1) + '%',
+        raw_edge: (score.edge * 100).toFixed(1) + '%',
+        fee_adj_edge: (adjEdge * 100).toFixed(1) + '%',
+        fee_rate: feeRate,
         hours_to_resolve: hoursToResolve.toFixed(1),
       }, 'Weather market scored');
     }

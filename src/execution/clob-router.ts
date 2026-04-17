@@ -116,16 +116,20 @@ export class ClobRouter {
       outcome = order.token_id === market.token_yes_id ? 'YES' : 'NO';
     }
 
-    // Fee model: HARD-CODED 0 per the second 2026-04-10 fix.
-    // See paper-simulator.ts for the full history — short version: the CLOB API
-    // returns `taker_base_fee` as a scaled integer (e.g. 1000 for 1641 of 6288
-    // markets), and the morning fix that read it as a decimal produced a $51,479 fee
-    // on a $51 trade. Polymarket's real mainnet CLOB taker fee is 0 today; hard-coding
-    // to 0 restores symmetry with live execution until the correct scaling factor is
-    // verified from Polymarket docs.
-    const feeRate = 0;
+    // Fee model: Polymarket taker fees (live since 2026-03-30).
+    // Formula: fee_per_share = feeRate × price × (1 − price).
+    // The CLOB API's `taker_base_fee` field is the feeRate coefficient (NOT a
+    // pre-computed fee). For markets where the API returns 0 or the market object
+    // is unavailable, fee = 0 (conservative — we'd rather under-charge in paper
+    // than repeat the $51K fee bug from 2026-04-10).
+    // The fee is applied to share count, not notional USDC.
+    const feeRate = market?.taker_fee ?? 0;
     const usdcSize = roundTo(order.price * order.size, 4);
-    const feeUsdc = roundTo(usdcSize * feeRate, 4);
+    // fee = shares × feeRate × price × (1-price), but we cap at the raw API
+    // value if it looks like a coefficient (< 0.1). If it's a large integer
+    // (the old scaling bug), clamp to 0 for safety.
+    const safeFeeRate = feeRate > 0.5 ? 0 : feeRate;
+    const feeUsdc = roundTo(order.size * safeFeeRate * order.price * (1 - order.price), 4);
     const netUsdc = order.side === 'BUY'
       ? roundTo(usdcSize + feeUsdc, 4)  // buying costs more
       : roundTo(usdcSize - feeUsdc, 4); // selling nets less

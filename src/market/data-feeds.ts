@@ -231,7 +231,136 @@ export async function getBinancePrice(asset: string): Promise<number | null> {
   }
 }
 
-// ─── 4. ORDERBOOK DEPTH ANALYSIS ─────────────────────────────────────
+// ─── 4. METAR/TAF AVIATION WEATHER (observed + short-range forecast) ─
+//
+// METAR = Meteorological Aerodrome Report: actual observed weather at an
+// airport station (updated hourly or more). TAF = Terminal Aerodrome
+// Forecast: 24-30h forecast issued every 6h. These are the ground truth
+// that forecast models try to predict — observed temp at the exact moment.
+//
+// Edge thesis: whale traders (ColdMath $104K PnL, speeda $20.5K 99% WR)
+// confirmed using airport station readings. METAR catches intra-day
+// temperature spikes/dips that model forecasts miss by hours.
+//
+// Source: aviationweather.gov — free, no auth, JSON, worldwide, batch.
+
+export interface METARObservation {
+  icao: string;
+  city: string;
+  temp_c: number;
+  temp_f: number;
+  dewpoint_c: number;
+  wind_speed_kt: number;
+  wind_dir: number;
+  altimeter_inhg: number;
+  raw_text: string;
+  observation_time: string;
+  fetched_at: number;
+}
+
+// City → nearest ICAO station for METAR lookups
+const CITY_ICAO: Record<string, string> = {
+  'new york': 'KJFK', 'nyc': 'KJFK',
+  'los angeles': 'KLAX', 'la': 'KLAX',
+  'chicago': 'KORD',
+  'miami': 'KMIA',
+  'denver': 'KDEN',
+  'seattle': 'KSEA',
+  'san francisco': 'KSFO',
+  'boston': 'KBOS',
+  'phoenix': 'KPHX',
+  'las vegas': 'KLAS',
+  'orlando': 'KMCO',
+  'dallas': 'KDFW',
+  'london': 'EGLL',
+  'paris': 'LFPG',
+  'tokyo': 'RJTT',
+  'berlin': 'EDDB',
+  'amsterdam': 'EHAM',
+  'madrid': 'LEMD',
+  'rome': 'LIRF',
+  'seoul': 'RKSI',
+  'shanghai': 'ZSPD',
+  'toronto': 'CYYZ',
+  'vancouver': 'CYVR',
+  'mexico city': 'MMMX',
+  'mumbai': 'VABB',
+  'tel aviv': 'LLBG',
+  'dubai': 'OMDB',
+  'singapore': 'WSSS',
+  'hong kong': 'VHHH',
+  'sydney': 'YSSY',
+  'ankara': 'LTAC',
+  'milan': 'LIMC',
+  'warsaw': 'EPWA',
+  'beijing': 'ZBAA',
+  'athens': 'LGAV',
+  'wuhan': 'ZHHH',
+};
+
+const metarCache = new Map<string, METARObservation>();
+const METAR_CACHE_TTL = 15 * 60 * 1000; // 15 minutes — METAR updates hourly
+
+export async function getMETARObservation(city: string): Promise<METARObservation | null> {
+  const key = city.toLowerCase();
+  const cached = metarCache.get(key);
+  if (cached && (Date.now() - cached.fetched_at) < METAR_CACHE_TTL) return cached;
+
+  const icao = CITY_ICAO[key];
+  if (!icao) return null;
+
+  try {
+    // aviationweather.gov ADDS API — returns decoded METAR in JSON
+    const url = `https://aviationweather.gov/api/data/metar?ids=${icao}&format=json&hours=2`;
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+
+    const data = await response.json() as METARResponse[];
+    if (!data?.length) return null;
+
+    // Take the most recent observation
+    const latest = data[0];
+    const tempC = latest.temp ?? null;
+    if (tempC === null) return null;
+
+    const obs: METARObservation = {
+      icao,
+      city: key,
+      temp_c: tempC,
+      temp_f: tempC * 9 / 5 + 32,
+      dewpoint_c: latest.dewp ?? 0,
+      wind_speed_kt: latest.wspd ?? 0,
+      wind_dir: latest.wdir ?? 0,
+      altimeter_inhg: latest.altim ?? 0,
+      raw_text: latest.rawOb ?? '',
+      observation_time: latest.reportTime ?? '',
+      fetched_at: Date.now(),
+    };
+
+    metarCache.set(key, obs);
+    log.debug({ city: key, icao, temp_f: obs.temp_f.toFixed(1), obs_time: obs.observation_time }, 'METAR observation fetched');
+    return obs;
+  } catch (err) {
+    log.debug({ city: key, err }, 'METAR fetch failed');
+    return null;
+  }
+}
+
+interface METARResponse {
+  icaoId?: string;
+  reportTime?: string;
+  temp?: number;
+  dewp?: number;
+  wspd?: number;
+  wdir?: number;
+  altim?: number;
+  rawOb?: string;
+}
+
+// ─── 5. ORDERBOOK DEPTH ANALYSIS ─────────────────────────────────────
 
 export interface OrderbookSignal {
   token_id: string;
