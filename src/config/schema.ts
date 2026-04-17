@@ -84,6 +84,12 @@ const apiConfigSchema = z.object({
   data_api_base_url: z.string().url().default('https://data-api.polymarket.com'),
   ws_url: z.string().default('wss://ws-subscriptions-clob.polymarket.com/ws/market'),
   rate_limit_per_second: z.number().positive().default(10),
+  // 2026-04-16 CTF Exchange V2 scaffolding. Polymarket is rolling a new
+  // exchange contract + native stablecoin (pUSD) ~2026-04-20 to -04-27.
+  // Flag is read-only today (only `v1` is wired). On cutover day we add
+  // `v2` behind this same flag. Migration plan:
+  // docs/ctf-exchange-v2-migration-plan-2026-04-16.md
+  exchange_version: z.enum(['v1', 'v2']).default('v1'),
 });
 
 const dashboardConfigSchema = z.object({

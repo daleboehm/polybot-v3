@@ -26,6 +26,10 @@ export interface ApiConfig {
   data_api_base_url: string;
   ws_url: string;
   rate_limit_per_second: number;
+  // 2026-04-16 CTF Exchange V2 scaffolding. See config/default.yaml and
+  // docs/ctf-exchange-v2-migration-plan-2026-04-16.md. Read-only today;
+  // only `v1` is wired into clob-router.ts.
+  exchange_version: 'v1' | 'v2';
 }
 
 export interface DashboardConfig {

@@ -54,6 +54,9 @@ api:
   data_api_base_url: https://data-api.polymarket.com
   ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
   rate_limit_per_second: 10
+  # 2026-04-16 CTF Exchange V2 scaffolding — see default.yaml for the full
+  # comment + migration plan at docs/ctf-exchange-v2-migration-plan-2026-04-16.md
+  exchange_version: v1
 
 dashboard:
   port: 9200
