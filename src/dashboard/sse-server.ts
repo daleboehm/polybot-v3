@@ -276,6 +276,7 @@ export class DashboardServer {
         return this.jsonResponse(res, getStrategyRolling(entityParam));
       }
       if (path === '/api/rd-strategies') return this.jsonResponse(res, this.getRdStrategies());
+      if (path === '/api/rd-strategies/checkpoints') return this.jsonResponse(res, this.getRdStrategyCheckpoints());
       // R3b endpoints (2026-04-10) — additive, dashboard structure preserved
       if (path === '/api/kill-switch' && req.method === 'GET') return this.jsonResponse(res, killSwitch.status());
       if (path === '/api/kill-switch' && req.method === 'POST') return await this.handleKillSwitchPost(req, res);
@@ -462,6 +463,26 @@ export class DashboardServer {
       const db = new Database(rdPath, { readonly: true, fileMustExist: true });
       try {
         return db.prepare('SELECT * FROM v_strategy_performance').all();
+      } finally {
+        db.close();
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 2026-04-20: cross-engine checkpoints fetch. Mirrors getRdStrategies() but
+   * reads v_strategy_checkpoints. Dashboard uses this to render "since 04-18"
+   * columns alongside cumulative scoreboard values so Dale can distinguish
+   * recent performance from life-to-date.
+   */
+  private getRdStrategyCheckpoints(): unknown[] {
+    const rdPath = process.env.RD_DATABASE_PATH ?? '/opt/polybot-v3-rd/data/rd.db';
+    try {
+      const db = new Database(rdPath, { readonly: true, fileMustExist: true });
+      try {
+        return db.prepare("SELECT * FROM v_strategy_checkpoints WHERE entity_slug='rd-engine'").all();
       } finally {
         db.close();
       }

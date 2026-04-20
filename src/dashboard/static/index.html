@@ -109,7 +109,7 @@ tr:last-child td { border-bottom: none; }
   <h2 id="localStrategiesHeader">Strategy Performance</h2>
   <table>
     <thead>
-      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Status</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th></tr>
+      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Status</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th><th title="Resolutions since R&D came back online 2026-04-18">Since 04-18 W/L</th><th title="Win rate since 04-18">WR</th><th title="Realized PnL since 04-18">PnL</th></tr>
     </thead>
     <tbody id="strategiesBody"></tbody>
   </table>
@@ -120,7 +120,7 @@ tr:last-child td { border-bottom: none; }
   <h2>R&D Strategy Performance <span class="count" style="font-size:0.75em;color:#718096;">(live data from R&D engine)</span></h2>
   <table>
     <thead>
-      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th></tr>
+      <tr><th>Strategy</th><th>Sub-Strategy</th><th>Trades</th><th>Open</th><th>Deployed</th><th>Upside</th><th>Resolved</th><th>W/L</th><th>Win Rate</th><th>P&L</th><th>Volume</th><th title="Resolutions since R&D came back online 2026-04-18">Since 04-18 W/L</th><th title="Win rate since 04-18">WR</th><th title="Realized PnL since 04-18">PnL</th></tr>
     </thead>
     <tbody id="rdStrategiesBody"></tbody>
   </table>
@@ -160,9 +160,45 @@ async function fetchJ(path) {
 }
 
 async function loadDashboard() {
-  const [status, entities, strategies, rdStrategies] = await Promise.all([
-    fetchJ('/api/status'), fetchJ('/api/entities'), fetchJ('/api/strategies'), fetchJ('/api/rd-strategies')
+  const [status, entities, strategies, rdStrategies, checkpoints, rdCheckpoints] = await Promise.all([
+    fetchJ('/api/status'), fetchJ('/api/entities'), fetchJ('/api/strategies'), fetchJ('/api/rd-strategies'),
+    fetchJ('/api/strategies/checkpoints'), fetchJ('/api/rd-strategies/checkpoints')
   ]);
+
+  // 2026-04-20: index checkpoint data by strategy|sub key, filtered to
+  // T2 (R&D back online 2026-04-18) era=after. One lookup per scoreboard
+  // row. Defensive fallbacks for empty arrays so layout doesn't break
+  // when the view hasn't accumulated rows yet.
+  const CHECKPOINT_LABEL = 'T2_rd_back_2026-04-18';
+  const buildCpIndex = (rows) => {
+    const idx = {};
+    (rows || []).forEach(r => {
+      if (r.checkpoint_label !== CHECKPOINT_LABEL) return;
+      if (r.era !== 'after') return;
+      const key = (r.strategy_id || '') + '|' + (r.sub_strategy_id || '');
+      idx[key] = r;
+    });
+    return idx;
+  };
+  const localCpIdx = buildCpIndex(checkpoints);
+  const rdCpIdx = buildCpIndex(rdCheckpoints);
+
+  // Renderer for the 3 since-04-18 cells. Returns the trailing <td> string
+  // so both scoreboard templates can append it uniformly.
+  const renderSinceCells = (strategyRow, cpIdx) => {
+    const key = (strategyRow.strategy_id || '') + '|' + (strategyRow.sub_strategy_id || '');
+    const cp = cpIdx[key];
+    if (!cp || !cp.n) {
+      return '<td class="neutral">—</td><td class="neutral">—</td><td class="neutral">—</td>';
+    }
+    const wrVal = cp.win_rate;
+    const wrCls = wrVal > 50 ? 'green' : wrVal > 30 ? 'orange' : 'red';
+    const pnlCls_ = cp.total_pnl > 0 ? 'green' : cp.total_pnl < 0 ? 'red' : 'neutral';
+    return '<td><span class="green">' + (cp.wins || 0) + '</span>/<span class="red">' + (cp.losses || 0) + '</span></td>' +
+           '<td class="' + wrCls + '">' + wrVal.toFixed(1) + '%</td>' +
+           '<td class="' + pnlCls_ + '">' + fmt(cp.total_pnl || 0) + '</td>';
+  };
+
   if (!status) return;
 
   // Detect engine mode — R&D (all paper) vs Prod (has live entities)
@@ -293,6 +329,7 @@ async function loadDashboard() {
         <td class="${wrCls}">${wrText}</td>
         <td class="${pnlCls(s.total_pnl || 0)}">${fmt(s.total_pnl || 0)}</td>
         <td>${fmtK(s.total_volume || 0)}</td>
+        ${renderSinceCells(s, localCpIdx)}
       </tr>`;
     }).join('');
   }
@@ -320,6 +357,7 @@ async function loadDashboard() {
         <td class="${wrCls}">${wrText}</td>
         <td class="${pnlCls(s.total_pnl || 0)}">${fmt(s.total_pnl || 0)}</td>
         <td>${fmtK(s.total_volume || 0)}</td>
+        ${renderSinceCells(s, rdCpIdx)}
       </tr>`;
     }).join('');
   }
