@@ -832,6 +832,22 @@ export function applySchema(db: Database.Database): void {
     log.warn({ err }, 'v_strategy_rolling recreation failed');
   }
 
+
+  // 2026-04-20: v_strategy_checkpoints recreate on every startup so edits
+  // to the CHECKPOINTS CTE in DDL take effect without a DB wipe.
+  try {
+    db.exec('DROP VIEW IF EXISTS v_strategy_checkpoints');
+    const cpDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_checkpoints[\s\S]*?CASE era WHEN 'before' THEN 1 ELSE 2 END;/);
+    if (cpDdl) {
+      db.exec(cpDdl[0]);
+      log.info('v_strategy_checkpoints view recreated');
+    } else {
+      log.warn('v_strategy_checkpoints DDL regex did not match');
+    }
+  } catch (err) {
+    log.warn({ err }, 'v_strategy_checkpoints recreation failed');
+  }
+
   // Record schema version
   const existing = db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as { version: number } | undefined;
   if (!existing || existing.version < SCHEMA_VERSION) {
