@@ -134,6 +134,16 @@ export class CrossMarketArbScout extends ScoutBase {
         for (let j = i + 1; j < sorted.length; j++) {
           const low = sorted[i];
           const high = sorted[j];
+          // v1.1 (2026-04-20): require DISTINCT thresholds. Two markets with
+          // identical numeric thresholds aren't a monotonicity pair; cluster
+          // key collision (e.g., "Will X snow 2.5 inches by date A?" vs
+          // "Will Y snow 2.5 inches by date B?") produces false "inversions"
+          // when the numbers match but the underlying events differ.
+          if (low.threshold >= high.threshold) continue;
+          // v1.1: also require same condition_id set isn't identical — skip
+          // if the two "legs" are actually the same market (duplicate cache).
+          if (low.market.condition_id === high.market.condition_id) continue;
+
           if (high.yesPrice <= low.yesPrice) continue; // monotonic, fine
 
           const inversion = high.yesPrice - low.yesPrice;
