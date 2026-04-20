@@ -26,6 +26,7 @@ import { LlmNewsScout } from './llm-news-scout.js';
 import { LeaderboardPollerScout } from './leaderboard-poller-scout.js';
 import { ExchangeDivergenceScout } from './exchange-divergence-scout.js';
 import { KLDivergenceScout } from './kl-divergence-scout.js';
+import { CrossMarketArbScout } from './cross-market-arb-scout.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('scout-coordinator');
@@ -75,6 +76,7 @@ export class ScoutCoordinator {
       new LeaderboardPollerScout(),
       new ExchangeDivergenceScout(),
       new KLDivergenceScout(),
+      new CrossMarketArbScout(),
     ];
     this.scouts = all.filter(s => !this.config.disabled_scouts.includes(s.id));
     log.info(
