@@ -6,6 +6,7 @@ import type { Signal, MarketData } from '../../types/index.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 import { getBinancePrice } from '../../market/data-feeds.js';
+import { getTaSignal } from '../../market/rsi-macd.js';
 
 const log = createChildLogger('strategy:crypto');
 
@@ -60,6 +61,7 @@ export class CryptoPriceStrategy extends BaseStrategy {
       'latency_arb',               // Baseline: fade Polymarket vs Binance spot (normal-CDF model)
       'target_proximity',          // Only trade when current ≈ target (near-boundary high-confidence zone)
       'volatility_premium_fade',   // Fade markets pricing implied vol >> realized vol
+      'ta_momentum',               // 2026-04-20 (stacyonchain): RSI+MACD session-aware confirmation of vol model
     ];
   }
   private recentTrades = new Map<string, number>();
@@ -69,7 +71,8 @@ export class CryptoPriceStrategy extends BaseStrategy {
     const anyEnabled =
       this.isSubStrategyEnabled(ctx, 'latency_arb') ||
       this.isSubStrategyEnabled(ctx, 'target_proximity') ||
-      this.isSubStrategyEnabled(ctx, 'volatility_premium_fade');
+      this.isSubStrategyEnabled(ctx, 'volatility_premium_fade') ||
+      this.isSubStrategyEnabled(ctx, 'ta_momentum');
     if (!anyEnabled) return signals;
     const markets = ctx.getActiveMarkets();
     const now = Date.now();
@@ -246,6 +249,57 @@ export class CryptoPriceStrategy extends BaseStrategy {
           metadata: { ...baseMetadata, sub_strategy: 'volatility_premium_fade' },
           created_at: new Date(),
         });
+      }
+
+      // ─── sub: ta_momentum (2026-04-20, per stacyonchain) ───
+      // RSI+MACD session-aware signal from Binance 5-min klines. Fires only
+      // when TA agrees with the volatility model (confirmation trade) AND
+      // horizon is short (<3h). Fee drag on crypto is 1.80% peak — we need
+      // a thick edge, so require vol-model edge >= 6% before confirming.
+      // crypto_price had n=3 resolved trades with no edge signal before this.
+      if (
+        this.isSubStrategyEnabled(ctx, 'ta_momentum') &&
+        hoursToResolve <= 3 &&
+        Math.abs(edge) >= 0.06
+      ) {
+        const ta = await getTaSignal(parsed.coingeckoId);
+        if (ta && ta.suggested_side !== 'NEUTRAL') {
+          // Does TA agree with our model side?
+          //   - side 'YES' on an Up/Down or 'above' market = betting UP
+          //   - side 'NO'  on the same market = betting DOWN
+          const modelUpSide: 'BUY_UP' | 'BUY_DOWN' =
+            (side === 'YES' && (parsed.isUpDown || effectiveDirection === 'above')) ||
+            (side === 'NO'  && !parsed.isUpDown && effectiveDirection === 'below')
+              ? 'BUY_UP' : 'BUY_DOWN';
+          const taAgrees = ta.suggested_side === modelUpSide;
+          if (taAgrees) {
+            signals.push({
+              signal_id: nanoid(),
+              entity_slug: ctx.entity.config.slug,
+              strategy_id: this.id,
+              sub_strategy_id: 'ta_momentum',
+              condition_id: market.condition_id,
+              token_id: tokenId,
+              side: 'BUY',
+              outcome: side,
+              strength: 0.85,
+              edge: Math.abs(edge),
+              model_prob: modelProb,
+              market_price: marketPrice,
+              recommended_size_usd: 8,
+              metadata: {
+                ...baseMetadata,
+                sub_strategy: 'ta_momentum',
+                ta_rsi: Math.round(ta.rsi * 10) / 10,
+                ta_macd_hist: Math.round(ta.macd_histogram * 100) / 100,
+                ta_session: ta.session,
+                ta_rationale: ta.rationale,
+              },
+              created_at: new Date(),
+            });
+            this.recentTrades.set(market.condition_id, now);
+          }
+        }
       }
 
       log.debug({

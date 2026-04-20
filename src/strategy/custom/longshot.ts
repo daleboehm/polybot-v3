@@ -13,6 +13,7 @@ import { calibratedSideProb, longshotBiasMultiplier, preferredExecutionModeForTa
 import { applyScoutOverlay } from '../scout-overlay.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
+import { isLifecycleEdgeMarket } from '../strategy-context.js';
 
 const log = createChildLogger('strategy:longshot');
 const DEDUP_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours — prevents re-entry on same market
@@ -71,11 +72,14 @@ export class LongshotStrategy extends BaseStrategy {
     // same market from firing 3 longshot subs in the same cycle (which would
     // consume 3x the position cap for one opportunity). Priority order:
     // news_overreaction_fade > bucketed_fade > systematic_fade.
+    // 2026-04-20 Action 6: lifecycle timing filter (opt-in via env).
+    const lifecycleOnly = process.env.LIFECYCLE_EDGE_ONLY === 'true';
     const firedThisCycle = new Set<string>();
 
     for (const m of ctx.getActiveMarkets()) {
       if (existingPositions.has(m.condition_id)) continue;
       if (!m.active || m.closed || !m.yes_price || !m.no_price) continue;
+      if (lifecycleOnly && !isLifecycleEdgeMarket(m)) continue;
 
       // Find the longshot (tail) side and the high-prob (fade) side
       // Tail = the cheap side; we want to BUY the expensive/high-prob side

@@ -14,6 +14,7 @@ import { applyScoutOverlay } from '../scout-overlay.js';
 import { scoreCasualness } from '../../market/sophistication-score.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
+import { isLifecycleEdgeMarket } from '../strategy-context.js';
 
 const log = createChildLogger('strategy:favorites');
 
@@ -41,10 +42,16 @@ export class FavoritesStrategy extends BaseStrategy {
       ctx.getOpenPositions(ctx.entity.config.slug).map(p => p.condition_id)
     );
 
+    // 2026-04-20 Action 6: lifecycle timing filter (opt-in via env).
+    // When LIFECYCLE_EDGE_ONLY=true, skip markets in mid-lifecycle where
+    // pricing is most efficient. Paper-test on R&D first.
+    const lifecycleOnly = process.env.LIFECYCLE_EDGE_ONLY === 'true';
+
     for (const market of markets) {
       if (existingPositions.has(market.condition_id)) continue;
       if (!market.active || market.closed) continue;
       if (!market.yes_price || !market.no_price) continue;
+      if (lifecycleOnly && !isLifecycleEdgeMarket(market)) continue;
 
       const endTime = market.end_date.getTime();
       if (!endTime || isNaN(endTime)) continue;
