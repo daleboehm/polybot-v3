@@ -129,7 +129,7 @@ export class Engine {
     this.regimeDetector = new RegimeDetector();
     this.alerter = new TelegramAlerter();
     this.paperSimulator = new PaperSimulator(this.marketCache, config.execution.slippage_bps, config.execution.paper_fill_delay_ms);
-    this.clobRouter = new ClobRouter(this.paperSimulator, config.api.clob_base_url, this.marketCache);
+    this.clobRouter = new ClobRouter(this.paperSimulator, config.api.clob_base_url, this.marketCache, config.api.exchange_version);
     this.strategyRegistry = new StrategyRegistry();
 
     // Register strategies — data-driven first, then opportunistic.

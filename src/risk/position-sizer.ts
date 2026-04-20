@@ -73,12 +73,26 @@ export function calculatePositionSize(
   const probUncertainty = typeof signal.metadata?.prob_uncertainty === 'number'
     ? signal.metadata.prob_uncertainty
     : 0;
+  // 2026-04-20 Kelly-drawdown co-optimization (Harry Crane, Rutgers):
+  // fractional_kelly derived FROM drawdown budget. sizeUsd risks
+  // (sizeUsd * stop_loss_pct) per loss at ~4 losses/day, so
+  // sizeUsd <= daily_lockout / (4 * stop_pct). Kelly cap = sizeUsd / equity.
+  // MIN(config, derived): user-set fraction is ceiling, drawdown is floor.
+  const EXPECTED_DAILY_LOSSES = 4;
+  const dailyLockout = limits.daily_loss_lockout_usd ?? 50;
+  const stopLossPct = limits.stop_loss_pct ?? 0.20;
+  const derivedMaxSize = dailyLockout / (EXPECTED_DAILY_LOSSES * stopLossPct);
+  const derivedKellyCap = tradingBalance > 0
+    ? derivedMaxSize / tradingBalance
+    : limits.fractional_kelly;
+  const effectiveKelly = Math.min(limits.fractional_kelly, derivedKellyCap);
+
   let sizeUsd = bypassSizer
     ? (signal.recommended_size_usd ?? 0)
     : kellySize(
         signal.model_prob,
         signal.market_price,
-        limits.fractional_kelly,
+        effectiveKelly,
         tradingBalance,
         { probUncertainty },
       );

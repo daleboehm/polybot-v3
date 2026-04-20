@@ -22,6 +22,7 @@ export class ClobRouter {
     private paperSimulator: PaperSimulator,
     private clobBaseUrl: string,
     private marketCache: MarketCache,
+    private exchangeVersion: "v1" | "v2" = "v1",
   ) {}
 
   async routeOrder(order: Order, entity: EntityState): Promise<OrderFill | null> {
@@ -89,6 +90,7 @@ export class ClobRouter {
         creds.api_key,
         creds.api_secret,
         creds.api_passphrase,
+        this.exchangeVersion,
       );
       this.clobClients.set(entity.config.slug, client);
       log.info({ entity: entity.config.slug }, 'CLOB client initialized');
@@ -170,24 +172,29 @@ export class ClobRouter {
  * Thin wrapper around @polymarket/clob-client for live order execution.
  */
 class ClobClientWrapper {
-  private client: InstanceType<typeof import('@polymarket/clob-client').ClobClient> | null = null;
+  // 2026-04-20 CTF V2 migration: client type is the union of V1 and V2 clients.
+  // The two expose identical method signatures for createOrder/postOrder (the
+  // only methods we call), so we treat them polymorphically via `any`.
+  // Constructor shape differs: V1 positional args, V2 named-options object.
+  private client: any = null;
   private host: string;
   private privateKey: string;
   private apiKey: string;
   private apiSecret: string;
   private apiPassphrase: string;
+  private exchangeVersion: "v1" | "v2";
 
-  constructor(host: string, privateKey: string, apiKey: string, apiSecret: string, apiPassphrase: string) {
+  constructor(host: string, privateKey: string, apiKey: string, apiSecret: string, apiPassphrase: string, exchangeVersion: "v1" | "v2" = "v1") {
     this.host = host;
     this.privateKey = privateKey;
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.apiPassphrase = apiPassphrase;
+    this.exchangeVersion = exchangeVersion;
   }
 
   private async getClient() {
     if (this.client) return this.client;
-    const mod = await import('@polymarket/clob-client');
     const { createWalletClient, http } = await import('viem');
     const { privateKeyToAccount } = await import('viem/accounts');
     const { polygon } = await import('viem/chains');
@@ -199,12 +206,30 @@ class ClobClientWrapper {
       transport: http(getPrimaryRpc()),
     });
 
-    this.client = new mod.ClobClient(
-      this.host,
-      137,
-      walletClient,
-      { key: this.apiKey, secret: this.apiSecret, passphrase: this.apiPassphrase },
-    );
+    const creds = { key: this.apiKey, secret: this.apiSecret, passphrase: this.apiPassphrase };
+
+    if (this.exchangeVersion === 'v2') {
+      // V2: named-options constructor, `chain` (not chainId), auto-handles V1+V2 orders.
+      // Polymarket CTF Exchange V2 launches 2026-04-22 with pUSD collateral token.
+      // See docs/ctf-exchange-v2-migration-plan-2026-04-16.md.
+      const modV2 = await import('@polymarket/clob-client-v2');
+      this.client = new modV2.ClobClient({
+        host: this.host,
+        chain: 137,
+        signer: walletClient,
+        creds,
+      });
+      log.info({ host: this.host }, 'CLOB V2 client initialized');
+    } else {
+      const mod = await import('@polymarket/clob-client');
+      this.client = new mod.ClobClient(
+        this.host,
+        137,
+        walletClient,
+        creds,
+      );
+      log.info({ host: this.host }, 'CLOB V1 client initialized');
+    }
     return this.client;
   }
 
@@ -217,7 +242,10 @@ class ClobClientWrapper {
   ): Promise<{ success: boolean; order_id?: string; tx_hash?: string; error?: string }> {
     try {
       const client = await this.getClient();
-      const mod = await import('@polymarket/clob-client');
+      // Import Side enum from whichever version is active
+      const mod = this.exchangeVersion === 'v2'
+        ? await import('@polymarket/clob-client-v2')
+        : await import('@polymarket/clob-client');
 
       const orderSide = side === 'BUY' ? mod.Side.BUY : mod.Side.SELL;
 

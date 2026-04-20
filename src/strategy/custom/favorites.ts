@@ -272,8 +272,14 @@ export class FavoritesStrategy extends BaseStrategy {
     // 0.5x on disagreement). The strategy's edge / calibration math is
     // unchanged — only recommended_size_usd gets the adjustment.
     const overlay = applyScoutOverlay(market.condition_id, side);
+    // 2026-04-20 Action 5 (04-19 report): favorites/compounding is the only
+    // strategy with substantial positive PnL (+$3.57 on n=90, 62.5% WR on
+    // prod; +$135 on n=574 on R&D). Double the base allocation on compounding
+    // specifically; other sub-strategies stay at base. Downstream risk-engine
+    // caps (max_position_pct, max_position_usd, envelope) still bind.
+    const compoundingMultiplier = subStrategyId === 'compounding' ? 2.0 : 1.0;
     const baseSize = 10;
-    const adjustedSize = Math.max(1, baseSize * overlay.multiplier);
+    const adjustedSize = Math.max(1, baseSize * overlay.multiplier * compoundingMultiplier);
     return {
       signal_id: nanoid(),
       entity_slug: ctx.entity.config.slug,

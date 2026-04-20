@@ -2,6 +2,43 @@
 
 **Updated: 2026-04-15** (PROD and R&D both running the same G1+G2+G3+G4b+`v_strategy_rolling` binary as of 18:32 UTC. Prod is halted via persisted `kill_switch_state` row, waiting on operator G4a backlog sweep + G5 cap right-sizing + G6 SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed commit `3bc2de3`, dry-run verified against the 7 open prod positions. G2 knob made explicit in prod yaml via commit `02dc5db`. Rolling-window observability (`v_strategy_rolling` view + `/api/strategies/rolling` endpoint + entity dashboard section) landed commits `41a0978` + `8ef142f` after the longshot 0.83-dead-zone kill verdict — the decision surface now shows per-trade P&L over 24h/48h/72h/all-time per (strategy, sub), so future sessions can't fall back into the all-time-average trap.)
 
+
+## 2026-04-20 Session Summary — CTF V2 + 04-19 Report Actions
+
+**Shipped today (single commit):**
+
+1. **CTF Exchange V2 migration** (04-19 Action 1, Tuesday deadline) — `@polymarket/clob-client-v2@1.0.0` installed side-by-side with v1. `ClobClientWrapper` branches on `api.exchange_version` config flag. R&D boot-test with `exchange_version: v2` succeeded. Flipped back to v1 until cutover day 2026-04-22. Cutover action: edit one line in both yamls, restart engines.
+2. **G8 NULL-strategy guard** — `assertStrategyAttribution()` in `src/storage/repositories/position-repo.ts` throws on `upsertPosition`/`addFillToPosition` if `strategy_id` is null/empty. 8 historical orphans (IDs 117-125, opened 2026-04-10) backfilled to `pre_guard_legacy` on prod DB.
+3. **Favorites/compounding 2x allocation** (04-19 Action 5) — only strategy with positive PnL across both engines (+$3.57 prod, +$135 R&D). `compoundingMultiplier = 2.0` in favorites.ts buildSignal. Other favorites subs unchanged. Risk-engine caps still bind.
+4. **Kelly-drawdown co-optimization** (04-17 report, Crane substack) — `effectiveKelly = min(fractional_kelly, daily_lockout / (4 * stop_pct * equity))`. Caps sizing to respect the daily loss budget. Live in `position-sizer.ts`.
+5. **Lifecycle edge helper** (04-19 Action 6) — `isLifecycleEdgeMarket(market)` in `strategy-context.ts`. Returns true if created_at < 6h or elapsed > 85%. Currently unused; strategies opt in by wrapping candidate selection. Additive filter, no regression risk.
+6. **RSI+MACD signal module** (04-19 2e, stacyonchain playbook) — `src/market/rsi-macd.ts`. Session-aware (Asia range / NY directional). `getTaSignal(asset)` returns suggested_side + rationale. **Not yet wired into crypto-price strategy** — follow-up.
+7. **Research SKILL.md hardening** — SSH ControlMaster (reuses one TCP connection across 20+ queries, fixes R&D SSH timeout seen in 04-19 run). Fixed `halted_by` schema mismatch in kill_switch_state query.
+8. **Fee audit** — verified `src/execution/clob-router.ts` + `paper-simulator.ts` use share-based formula `fillSize * feeRate * price * (1-price)` (shipped commit `1495583`). Category rates in `src/utils/math.ts` `POLYMARKET_FEE_RATES` confirmed against 04-19 report source.
+
+**Decision gates (pre-committed):**
+
+- **Weather 72h validation gate** (open, review 2026-04-23):
+  - Keep weather_forecast enabled on R&D through 2026-04-23
+  - All 42 prod trades showing -$10.41 predate the 2026-04-17 improvements (METAR, fee-adjusted edge, AIFS ensemble, 2x alloc, hold-to-settlement). They're stale evidence.
+  - Decision rule at 2026-04-23 based on R&D resolutions with `closed_at > '2026-04-17 06:00:00'`:
+    - n >= 20 and avg PnL > +$0.10/trade -> keep, mark improvements validated
+    - n >= 20 and avg PnL <= -$0.05/trade -> disable with confidence, Jua/EPT-2 thesis confirmed
+    - n < 20 -> extend window another 72h
+
+- **systematic_fade verdict** (open, review 2026-04-23):
+  - Post-Fix-1 R&D data (closed_at > 2026-04-17 06:00): n=94, avg -$0.009/trade, total -$0.86 [DB: rd positions]
+  - Pre-Fix-1 was avg -$0.242/trade — 27x improvement toward zero. Fix 1 worked.
+  - Still slightly negative; holding another 72h to see if it crosses break-even. Don't retire yet.
+
+**Explicitly deferred to next session:**
+- Wire `getTaSignal()` from rsi-macd.ts into `crypto-price.ts` as a new sub-strategy or probability modifier
+- Wire `isLifecycleEdgeMarket()` into favorites + longshot candidate selection (paper-test R&D first)
+- Dynamic Kelly = f(ensemble_stdev) — extends Fix 1 probUncertainty; weather-specific, gated on weather 72h outcome
+- GFS ensemble blending + per-city accuracy curves — gated on weather 72h outcome
+- PolySwarm KL-divergence detector (04-17 Action 6) — M-L effort, multi-market state
+
+
 ## Start-of-session checklist for any Claude
 
 1. Read `docs/status.md` for current state

@@ -3,7 +3,23 @@
 import { getDatabase } from '../database.js';
 import type { Outcome } from '../../types/index.js';
 
+function assertStrategyAttribution(p: PositionUpsert, fn: string): void {
+  // 2026-04-20 G8: NULL-strategy guard. Every position MUST have a strategy_id.
+  // Reconciler orphans are tagged 'reconciler_orphan' (commit 26af1c8). Any other
+  // path that lands here without attribution is a bug — throw so it's loud.
+  // Historical orphans (IDs 117-125, opened 2026-04-10) were backfilled with
+  // 'pre_guard_legacy' to keep this assert clean on startup.
+  const sid = p.strategy_id?.trim();
+  if (!sid) {
+    throw new Error(
+      `${fn}: strategy_id is null/empty for entity=${p.entity_slug} condition=${p.condition_id} token=${p.token_id}. ` +
+      'All positions must carry attribution. If this is an on-chain reconciler orphan, set strategy_id="reconciler_orphan".'
+    );
+  }
+}
+
 export function upsertPosition(p: PositionUpsert): void {
+  assertStrategyAttribution(p, "upsertPosition");
   // 2026-04-10 contamination fix: previously the ON CONFLICT UPDATE clause
   // overwrote `sub_strategy_id` (but not `strategy_id`) on every conflict,
   // producing mixed-strategy rows like `favorites|bucketed_fade` whenever a
@@ -33,7 +49,7 @@ export function upsertPosition(p: PositionUpsert): void {
     p.entity_slug, p.condition_id, p.token_id, p.side, p.size,
     p.avg_entry_price, p.cost_basis, p.current_price ?? null,
     p.unrealized_pnl ?? null, p.market_question ?? null, p.market_slug ?? null,
-    p.strategy_id ?? null, p.sub_strategy_id ?? null, p.is_paper ? 1 : 0,
+    p.strategy_id, p.sub_strategy_id ?? null, p.is_paper ? 1 : 0,
   );
 }
 
@@ -71,6 +87,7 @@ export function closePosition(entitySlug: string, conditionId: string, tokenId: 
 // two filled amounts are weighted by their dollars, which is what we want. NULLIF
 // guards against a divide-by-zero in the degenerate case where both sizes are 0.
 export function addFillToPosition(p: PositionUpsert): void {
+  assertStrategyAttribution(p, "addFillToPosition");
   const db = getDatabase();
   db.prepare(`
     INSERT INTO positions (
@@ -95,7 +112,7 @@ export function addFillToPosition(p: PositionUpsert): void {
     p.entity_slug, p.condition_id, p.token_id, p.side, p.size,
     p.avg_entry_price, p.cost_basis, p.current_price ?? null,
     p.unrealized_pnl ?? null, p.market_question ?? null, p.market_slug ?? null,
-    p.strategy_id ?? null, p.sub_strategy_id ?? null, p.is_paper ? 1 : 0,
+    p.strategy_id, p.sub_strategy_id ?? null, p.is_paper ? 1 : 0,
   );
 }
 

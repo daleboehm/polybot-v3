@@ -98,3 +98,25 @@ export function createStrategyContext(
     },
   };
 }
+
+
+// 2026-04-20 Action 6 (04-19 report): lifecycle timing filter per SSRN
+// 5910522 (Reichenbach & Walther, 124M trades) — pricing inaccuracies
+// cluster at contract inception (< 6h) and near resolution (> 85% elapsed).
+// Strategies opt in by wrapping candidate selection with isLifecycleEdgeMarket().
+export function isLifecycleEdgeMarket(market: { end_date?: Date; created_at?: Date }): boolean {
+  const now = Date.now();
+  const created = market.created_at?.getTime();
+  const end = market.end_date?.getTime();
+  if (!end) return false;
+  if (created && (now - created) < 6 * 3600 * 1000) return true;
+  if (created) {
+    const totalLife = end - created;
+    const elapsed = now - created;
+    if (totalLife > 0 && elapsed / totalLife > 0.85) return true;
+  } else {
+    const hoursLeft = (end - now) / 3600 / 1000;
+    if (hoursLeft < 2) return true;
+  }
+  return false;
+}
