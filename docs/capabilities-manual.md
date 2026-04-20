@@ -38,6 +38,33 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 - [ ] Cross-market-arb scout v1.1 noise filter (same-threshold false positives)
 - [ ] Dale green-lights with strategy starter set
 
+
+**AWAITING DALE REVIEW: Shanghai Polymarket dataset integration** (added 2026-04-20 from Grok variance report)
+- Source: GitHub `SII-WANGZJ/Polymarket_data` + HuggingFace mirror. Verified 2026-04-20: legit academic release (Shanghai Innovation Institute + Westlake + SJTU + Harbin IT + Fudan co-authors), 476 GitHub stars, 30K+ monthly HF downloads, MIT license, citation published, last updated 2026-03-05.
+- Dataset: 1.9B trades, 163GB total. Recommended `trades.parquet` file is 28GB (manageable on VPS disk).
+- Thesis: backtest layer we don't have. R&D is forward-paper only; historical backtesting would validate new strategies before committing R&D compute, discover category-specific mispricing patterns (movies/economics/etc.), and cross-check calibrator drift vs ground truth across 1.9B trades.
+- Decision gate: if Dale approves, spend ~2h prototyping with trades.parquet on VPS. Run one current strategy (favorites/compounding) through the simulator. If backtest WR/PnL converges with live R&D results → viable integration; if divergence is large → useful finding about question-format scope. Either outcome advances capability.
+- Effort: M (storage + pipeline + first backtest). Not L because recommended file is 28GB not 107GB.
+- **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
+
+**AWAITING DALE REVIEW: PCA factor model + GARCH volatility layer** (added 2026-04-20 from Grok variance report, post-unhalt candidate)
+- Source: Grok variance research via X-sphere 2026-04-20 (mechanics cited as standard quant finance, backtested by practitioner community; "Sharpe 8.8" claims in the source material discounted as hype)
+- Thesis: treat markets as correlated assets. PCA decomposes common factors across politics/macro/crypto/event categories. GARCH models volatility clustering. Position sizing uses portfolio-level σ²ₚ = wᵀΣw rather than per-position Kelly alone.
+- What's already in place: `src/risk/portfolio-risk.ts` tracks correlation heat across neg-risk clusters. No explicit PCA/GARCH decomposition.
+- Why not now: (a) L effort, (b) prod bankroll $374 can't size to portfolio-level risk meaningfully, (c) V2 cutover + unhalt are higher priority. Real value unlocks after prod is stable > $5K.
+- Reopen criteria: prod unhalt + 14d stable operation + equity > $5K.
+- **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
+
+**Grok variance report 2026-04-20 — already-covered findings (DO NOT re-propose):**
+- Combinatorial arb (arXiv 2508.03474): already SHIPPED as cross-market-arb-scout v1.1 (`658cb06`) + NegRisk-arb type-1 (`3a80b8b`, `5ee113d`).
+- Copytrade from smart wallets: already SHIPPED as whale_copy + whale_fade with 21 Bravado-filtered whales (`73fd092`).
+- Orderbook/WebSocket scouts: already SHIPPED (FastCryptoEvaluator + book-quality-check + ExchangeDivergenceScout).
+- Early exits: stop-loss-monitor emits 4 exit types (profit_target, trailing_lock, hard_stop, stop_loss).
+- RSI+MACD momentum: shipped as ta_momentum sub (`a992664`).
+- Weather APIs (NOAA/ECMWF/HRRR): Open-Meteo AIFS + NWS + METAR all wired.
+- Kelly + dislocation δ: fractional Kelly + α-boundary correction (`8bbedaa`), 3-tier calibrator (own → Markov → naive).
+- LLM-driven edge detection: DEFERRED in 8b (prod bankroll <$5K reopen criterion).
+
 ---
 
 ## 8b. Known-Deferred (DO NOT re-propose without new evidence)
