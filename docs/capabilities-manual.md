@@ -41,7 +41,7 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 
 **AWAITING DALE REVIEW: Shanghai Polymarket dataset integration** (added 2026-04-20 from Grok variance report)
 - Source: GitHub `SII-WANGZJ/Polymarket_data` + HuggingFace mirror. Verified 2026-04-20: legit academic release (Shanghai Innovation Institute + Westlake + SJTU + Harbin IT + Fudan co-authors), 476 GitHub stars, 30K+ monthly HF downloads, MIT license, citation published, last updated 2026-03-05.
-- Dataset: 1.9B trades, 163GB total. Recommended `trades.parquet` file is 28GB (manageable on VPS disk).
+- Dataset: 1.9B trades, 163GB total. Recommended starting set: `trades.parquet` (28GB) + `quant.parquet` (28GB, pre-cleaned YES-token perspective) = ~56GB for full quant coverage. Selective Parquet loads (pyarrow/pandas) avoid full-RAM requirements.
 - Thesis: backtest layer we don't have. R&D is forward-paper only; historical backtesting would validate new strategies before committing R&D compute, discover category-specific mispricing patterns (movies/economics/etc.), and cross-check calibrator drift vs ground truth across 1.9B trades.
 - Decision gate: if Dale approves, spend ~2h prototyping with trades.parquet on VPS. Run one current strategy (favorites/compounding) through the simulator. If backtest WR/PnL converges with live R&D results → viable integration; if divergence is large → useful finding about question-format scope. Either outcome advances capability.
 - Effort: M (storage + pipeline + first backtest). Not L because recommended file is 28GB not 107GB.
@@ -52,8 +52,23 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 - Thesis: treat markets as correlated assets. PCA decomposes common factors across politics/macro/crypto/event categories. GARCH models volatility clustering. Position sizing uses portfolio-level σ²ₚ = wᵀΣw rather than per-position Kelly alone.
 - What's already in place: `src/risk/portfolio-risk.ts` tracks correlation heat across neg-risk clusters. No explicit PCA/GARCH decomposition.
 - Why not now: (a) L effort, (b) prod bankroll $374 can't size to portfolio-level risk meaningfully, (c) V2 cutover + unhalt are higher priority. Real value unlocks after prod is stable > $5K.
+- Implementation path (when reopened): sklearn.decomposition.PCA + statsmodels GARCH, rolling window on our v_strategy_checkpoints returns matrix. Training set can draw on Shanghai dataset once integrated (cross-hypothesis dependency).
 - Reopen criteria: prod unhalt + 14d stable operation + equity > $5K.
 - **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
+
+**AWAITING DALE REVIEW: Oracle-lag arbitrage extension to crypto_price/latency_arb** (added 2026-04-20 from Grok variance report)
+- Thesis: Polymarket 5m/15m crypto markets resolve on Chainlink Data Streams (~500ms latency). CEX feeds (Binance ~10-50ms) lead Chainlink in fast-moving windows. A dedicated sub inside `crypto_price` could fire when the Chainlink-vs-Binance delta exceeds 0.1-0.3% on BTC/ETH/SOL/XRP 5-15min markets.
+- Why this is an EXTENSION, not a new strategy: our existing `crypto_price/latency_arb` sub fades Polymarket vs Binance spot (different trigger). Adding a Chainlink data feed + new sub-sub inside the same strategy is lower-cost than a new strategy module. Book-quality-check + FastCryptoEvaluator already handle the execution-latency requirements.
+- Hype check: the "$868k PnL" claim cited in the source material is disputed — on-chain shows max single wins ~$4.7k with many losses. Mechanism is real; returns are cherry-picked. Expect capped tail wins, not transformative.
+- Effort: M (Chainlink price feed, new sub registered under crypto_price, latency metrics column in DB).
+- Decision gate: 7-day R&D paper with dry-run positions ≤ $2, compare PnL vs fees. If net-positive after slippage and fees → evaluate for prod post-unhalt.
+- **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
+
+**AWAITING DALE REVIEW: Esports probability models (deferred, Shanghai-backtest-first)** (added 2026-04-20)
+- Thesis: Polymarket has active esports markets (LoL, CS2, Dota). Edge comes from domain stats (HLTV ratings, Liquipedia meta, map-ban/pick patterns) vs retail crowd bias. Pure category expansion; we don't cover esports today.
+- Why deferred: (a) prod bankroll $374 doesn't size to a new category, (b) dependent on Shanghai dataset viability — if the dataset reveals esports mispricings worth chasing, reopen; if not, skip entirely. Grok's framing: "reopen criterion = successful Shanghai backtest on sports categories first."
+- Effort: M (scraper for esports feed + simple ELO/Markov model).
+- **Status**: recommendation only, NOT shipped. Depends on outcome of Shanghai dataset hypothesis above.
 
 **Grok variance report 2026-04-20 — already-covered findings (DO NOT re-propose):**
 - Combinatorial arb (arXiv 2508.03474): already SHIPPED as cross-market-arb-scout v1.1 (`658cb06`) + NegRisk-arb type-1 (`3a80b8b`, `5ee113d`).
