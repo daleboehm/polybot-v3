@@ -56,13 +56,18 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 - Reopen criteria: prod unhalt + 14d stable operation + equity > $5K.
 - **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
 
-**AWAITING DALE REVIEW: Oracle-lag arbitrage extension to crypto_price/latency_arb** (added 2026-04-20 from Grok variance report)
-- Thesis: Polymarket 5m/15m crypto markets resolve on Chainlink Data Streams (~500ms latency). CEX feeds (Binance ~10-50ms) lead Chainlink in fast-moving windows. A dedicated sub inside `crypto_price` could fire when the Chainlink-vs-Binance delta exceeds 0.1-0.3% on BTC/ETH/SOL/XRP 5-15min markets.
-- Why this is an EXTENSION, not a new strategy: our existing `crypto_price/latency_arb` sub fades Polymarket vs Binance spot (different trigger). Adding a Chainlink data feed + new sub-sub inside the same strategy is lower-cost than a new strategy module. Book-quality-check + FastCryptoEvaluator already handle the execution-latency requirements.
-- Hype check: the "$868k PnL" claim cited in the source material is disputed — on-chain shows max single wins ~$4.7k with many losses. Mechanism is real; returns are cherry-picked. Expect capped tail wins, not transformative.
-- Effort: M (Chainlink price feed, new sub registered under crypto_price, latency metrics column in DB).
-- Decision gate: 7-day R&D paper with dry-run positions ≤ $2, compare PnL vs fees. If net-positive after slippage and fees → evaluate for prod post-unhalt.
-- **Status**: recommendation only, NOT shipped. Awaits Dale approval per 2026-04-20 no-auto-changes directive.
+**DEFERRED: Oracle-lag arbitrage extension to crypto_price/latency_arb** (added 2026-04-20 from Grok variance report, downgraded same day after research gates identified)
+- Original thesis: Polymarket 5m/15m crypto markets resolve on Chainlink Data Streams (~500ms latency); CEX feeds (Binance ~10-50ms) lead the oracle and could be arbed.
+- 2026-04-20 research findings (~15 min WebFetch pass before any code):
+  - **Chainlink Data Streams is NOT a public free-tier API.** Docs.chain.link only says "Contact us to talk to an expert about integrating" — enterprise-gated, no documented pricing. Real blocker on shipping an integration without first determining access tier.
+  - **Polymarket's actual crypto resolution source is NOT confirmed as Chainlink for short-duration markets.** Learn/docs link to chainlink resolution-source page 404s. No clean citation beyond Grok's assertion.
+  - **The underlying idea is already subsumed by our existing stack**: `crypto_price/latency_arb` sub fades Polymarket CLOB vs Binance spot; `FastCryptoEvaluator` reacts to orderbook snapshots within 10s; `ExchangeDivergenceScout` checks 3-source crypto consensus. An oracle feed would be incremental, not transformative.
+  - **Hype check**: the "$868k PnL" claim is disputed (on-chain max single wins ~\$4.7k per Grok pass-2).
+- Reopen criteria:
+  1. Confirm Polymarket crypto resolution source specifically for 5m/15m markets (read from contract, not docs). AND
+  2. Obtain Chainlink Data Streams access pricing / free-tier availability. AND
+  3. Measure the oracle-vs-Binance latency gap empirically (on-chain timestamps, not Grok's 500ms claim).
+- **Status**: DEFERRED. All three criteria must clear before this becomes actionable. Until then, our existing latency_arb + FastCryptoEvaluator is the relevant surface area.
 
 **AWAITING DALE REVIEW: Esports probability models (deferred, Shanghai-backtest-first)** (added 2026-04-20)
 - Thesis: Polymarket has active esports markets (LoL, CS2, Dota). Edge comes from domain stats (HLTV ratings, Liquipedia meta, map-ban/pick patterns) vs retail crowd bias. Pure category expansion; we don't cover esports today.
