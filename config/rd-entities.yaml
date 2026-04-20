@@ -22,6 +22,7 @@ entities:
     strategies:
       - weather_forecast
       - crypto_price
+      - whale_fade
       - favorites
       - longshot
       - convergence

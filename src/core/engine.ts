@@ -35,6 +35,7 @@ import { SportsbookFadeStrategy } from '../strategy/custom/sportsbook-fade.js';
 import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-divergence.js';
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
 import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
+import { WhaleFadeStrategy } from '../strategy/custom/whale-fade.js';
 import { NegRiskArbitrageStrategy } from '../strategy/custom/negrisk-arbitrage.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { FastCryptoEvaluator } from './fast-crypto-evaluator.js';
@@ -154,6 +155,7 @@ export class Engine {
     // the strategy loadable. See docs/todo.md WHALE ACTIVATION PLAYBOOK
     // for the full flip-on sequence.
     this.strategyRegistry.register(new WhaleCopyStrategy());
+    this.strategyRegistry.register(new WhaleFadeStrategy());
 
     // 2026-04-16 Fix 3: NegRisk combinatorial arbitrage scanner. Groups active
     // markets by neg_risk_market_id, fires one BUY signal per family member
