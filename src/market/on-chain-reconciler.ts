@@ -143,7 +143,20 @@ export class OnChainReconciler {
       // Defensive: the API is supposed to return numeric fields numerically
       // on this endpoint, but we coerce in case of shape drift.
       const cv = Number(p.currentValue);
-      const isDead = p.redeemable === true || (Number.isFinite(cv) && cv === 0);
+      const cp = Number(p.curPrice);
+      // 2026-04-20: effectively-resolved signal. Polymarket Gamma API often
+      // lags UMA finalization by days (seen up to 8d on Peruvian election
+      // markets 2026-04-10). When curPrice is terminal (>= 0.99 or <= 0.01)
+      // the market has effectively resolved even if the `redeemable` flag
+      // is stale. Classify as dead and attempt redemption — if UMA has
+      // actually finalized under the hood, the on-chain redeemPositions tx
+      // succeeds and we recover USDC; if not, the tx reverts and this
+      // position stays open for next cycle's retry. No divergence risk.
+      const effectivelyResolved = Number.isFinite(cp) && (cp >= 0.99 || cp <= 0.01);
+      const isDead =
+        p.redeemable === true ||
+        (Number.isFinite(cv) && cv === 0) ||
+        effectivelyResolved;
       if (isDead) {
         apiDeadByAsset.set(p.asset, p);
       } else {
