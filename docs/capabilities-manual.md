@@ -70,6 +70,11 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 - Effort: M (scraper for esports feed + simple ELO/Markov model).
 - **Status**: recommendation only, NOT shipped. Depends on outcome of Shanghai dataset hypothesis above.
 
+**RISK AWARENESS (not a hypothesis): Feb 2026 \$0.1-gas market-maker desync attack** (added 2026-04-20 from Grok pass-3)
+- Pattern: during market periods with gas-price mismatches between off-chain order matching and on-chain settlement, maker bots with unhedged inventory took losses from order-flip/rollback sequences.
+- Why this matters for us: we currently run TAKER-only. If we enable maker-rebate capture post-V2 (noted as opportunity in 04-17 report sections 2c+5), this attack vector becomes relevant — need to account for it in the maker-strategy design (gas-price awareness, inventory caps, off-chain-to-on-chain atomicity checks).
+- **Status**: awareness note, NOT an open hypothesis. Re-surfaces when we design a maker strategy.
+
 **Grok variance report 2026-04-20 — already-covered findings (DO NOT re-propose):**
 - Combinatorial arb (arXiv 2508.03474): already SHIPPED as cross-market-arb-scout v1.1 (`658cb06`) + NegRisk-arb type-1 (`3a80b8b`, `5ee113d`).
 - Copytrade from smart wallets: already SHIPPED as whale_copy + whale_fade with 21 Bravado-filtered whales (`73fd092`).
