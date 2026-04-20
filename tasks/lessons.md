@@ -17,3 +17,21 @@ Operator mistakes + the correction pattern so they don't recur.
 4. **Flag money-moving actions in the response with a leading ⚠️** so Dale can't miss them.
 
 **Scope of the rule.** Applies to `redeem-all`, `sell-position`, `whale-consensus --execute`, any future money-moving CLI, and any SQL UPDATE that changes cash/positions/resolutions on a live entity.
+
+## 2026-04-20: Research produces recommendations, never changes (Dale directive)
+
+**What Dale said**: "I do not want auto changes based upon research. Once research is vetted send me an email telling me I need to review your recommendations. I don't need to see daily research reports. Just a message that says I need to look at what you are now suggesting."
+
+**The rule going forward.**
+
+1. **Nightly research pipeline is RECOMMENDATION-ONLY.** The email notifies Dale that a vetted recommendation set exists. Full report stays on disk for him to read on his time. No code, config, or DB change is implemented by the pipeline itself.
+
+2. **Claude sessions must not auto-ship research findings.** Even during an interactive session, if a research report (current or previous day) suggests an implementation, do NOT proactively ship it. Surface the finding, explain the tradeoff, and wait for Dale's explicit "ship it" before any commit/push/deploy.
+
+3. **Exception: bug fixes surfaced by research are still bug fixes.** If research identifies an active defect (e.g. "partial-basket bleed in negrisk_arb"), the fix for the bug itself is a separate conversation — Dale should still approve, but the bug-fix framing is distinct from "implement this new strategy idea."
+
+4. **Scope of the rule**: applies to new strategies, new scouts, new data feeds, new risk knobs, config changes driven by research theses, and anything that would alter trading behavior on either engine. Does not apply to observability-only changes (dashboards, views, logs) unless Dale says otherwise.
+
+**Why this matters.** Research findings are probabilistic — the researcher's case always looks strong in isolation. Dale's vetting catches the interactions (does this conflict with an active hypothesis? is there a simpler alternative? is the complexity worth the expected impact?). Shipping without vetting destroys that review layer and creates cascade risk on an already-halted prod.
+
+**Scope of the rule.** Applies to every Claude session reading this file and every future iteration of the research pipeline. Update ONLY with Dale's explicit direction.
