@@ -993,6 +993,33 @@ export class Engine {
     // SELL fills would reduce/close positions — handled by position reconciliation
   }
 
+  /**
+   * 2026-04-20: sanity guard for equity computation regressions.
+   * After a dashboard bug briefly showed R&D at -$400K (root-caused + fixed
+   * same day), add a defensive check: if computed equity deviates absurdly
+   * from starting_capital, log a loud ERROR so the next regression is
+   * caught before it hits the dashboard. Thresholds:
+   *   - equity > 10x starting_capital: likely double-counting or unit bug
+   *   - equity < -2x starting_capital: impossible for paper/live (bankroll bounded)
+   *   - deployed > 5x starting_capital: stale positions or cost-basis bug
+   * Uses log.error so alerter picks it up. Does NOT block the snapshot
+   * write — research data integrity beats assertion safety here.
+   */
+  private sanityCheckEquity(entitySlug: string, seed: number, equity: number, deployed: number): void {
+    if (seed <= 0) return; // new/unfunded entity, skip
+    const absRatio = Math.abs(equity) / seed;
+    const deployRatio = deployed / seed;
+    if (absRatio > 10) {
+      log.error({ entity: entitySlug, seed, equity, ratio: absRatio.toFixed(2) }, 'EQUITY SANITY GUARD: equity > 10x starting_capital — likely calc bug');
+    }
+    if (equity < -2 * seed) {
+      log.error({ entity: entitySlug, seed, equity }, 'EQUITY SANITY GUARD: equity < -2x starting_capital — paper/live cannot go this negative');
+    }
+    if (deployRatio > 5) {
+      log.error({ entity: entitySlug, seed, deployed, ratio: deployRatio.toFixed(2) }, 'EQUITY SANITY GUARD: deployed > 5x starting_capital — stale positions or cost-basis bug');
+    }
+  }
+
   private captureSnapshots(): void {
     const now = Math.floor(Date.now() / 1000);
     const utc = new Date().toISOString();
@@ -1001,12 +1028,14 @@ export class Engine {
       const openCount = getOpenPositionCount(entity.config.slug);
       const positions = getOpenPositions(entity.config.slug);
       const positionsValue = positions.reduce((sum, p) => sum + (p.cost_basis ?? 0), 0);
+      const totalEquity = entity.cash_balance + entity.reserve_balance + positionsValue;
+      this.sanityCheckEquity(entity.config.slug, entity.config.starting_capital, totalEquity, positionsValue);
 
       insertSnapshot({
         entity_slug: entity.config.slug,
         timestamp: now,
         timestamp_utc: utc,
-        total_equity: entity.cash_balance + entity.reserve_balance + positionsValue,
+        total_equity: totalEquity,
         cash_balance: entity.cash_balance,
         reserve_balance: entity.reserve_balance,
         trading_balance: entity.trading_balance,
@@ -1016,7 +1045,7 @@ export class Engine {
         num_open_orders: 0,
         daily_pnl: entity.daily_pnl,
         deposit_basis: entity.config.starting_capital,
-        pnl_vs_deposit: (entity.cash_balance + entity.reserve_balance + positionsValue) - entity.config.starting_capital,
+        pnl_vs_deposit: totalEquity - entity.config.starting_capital,
       });
     }
   }
