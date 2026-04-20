@@ -10,7 +10,7 @@ import { getEntityPnlView } from '../storage/repositories/entity-repo.js';
 import { getTradesByEntity } from '../storage/repositories/trade-repo.js';
 import { getOpenPositions, getOpenPositionsWithMarketMeta } from '../storage/repositories/position-repo.js';
 import { getOrdersByEntity, getOpenOrders } from '../storage/repositories/order-repo.js';
-import { getResolutionsByEntity, getStrategyPerformance, getStrategyRolling } from '../storage/repositories/resolution-repo.js';
+import { getResolutionsByEntity, getStrategyPerformance, getStrategyRolling, getStrategyCheckpoints } from '../storage/repositories/resolution-repo.js';
 import { getSnapshots } from '../storage/repositories/snapshot-repo.js';
 import { getMarketCount, getActiveMarkets } from '../storage/repositories/market-repo.js';
 import { createChildLogger } from '../core/logger.js';
@@ -267,6 +267,10 @@ export class DashboardServer {
       if (path === '/api/entities')    return this.jsonResponse(res, getEntityPnlView());
       if (path === '/api/markets')     return this.jsonResponse(res, { counts: getMarketCount(), active: getActiveMarkets().slice(0, 50) });
       if (path === '/api/strategies')  return this.jsonResponse(res, getStrategyPerformance());
+      if (path === '/api/strategies/checkpoints') {
+        const entityParam = url.searchParams.get('entity') || undefined;
+        return this.jsonResponse(res, getStrategyCheckpoints(entityParam));
+      }
       if (path === '/api/strategies/rolling') {
         const entityParam = url.searchParams.get('entity') ?? undefined;
         return this.jsonResponse(res, getStrategyRolling(entityParam));

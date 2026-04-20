@@ -92,13 +92,17 @@ export class FavoritesStrategy extends BaseStrategy {
       // metadata.preferred_execution_mode='taker' so the order-builder
       // switches from maker to taker. Captured via preferredExecutionModeForTail().
 
-      // ─── sub: compounding (now 0.50-0.85 — audit A-P1-4 boundary fix) ───
+      // ─── sub: compounding (2026-04-20: floor raised 0.50 -> 0.70 after
+      // R&D data showed the 0.60-0.70 entry-price bucket was -$45.30 on n=173
+      // (62.4% WR, -$0.26/trade) while 0.70+ was +$78.65 on n=213. The dead
+      // zone is moderate favorites where calibration can't add enough edge
+      // to clear fees. Upper bound unchanged. See session 2026-04-20.) ───
       // Previously 0.50-0.92 which overlapped with fan_fade (0.85-0.92), causing
       // both subs to fire on the same markets with opposite sides. Compounding
       // now stops at 0.85 exclusive; fan_fade owns the 0.85-0.92 band.
       if (
         this.isSubStrategyEnabled(ctx, 'compounding') &&
-        favoritePrice >= 0.50 && favoritePrice < 0.85 &&
+        favoritePrice >= 0.70 && favoritePrice < 0.85 &&
         hoursToResolve >= 2 && hoursToResolve <= 48 &&
         payoff >= 0.03
       ) {

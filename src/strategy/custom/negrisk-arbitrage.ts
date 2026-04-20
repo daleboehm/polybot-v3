@@ -61,6 +61,15 @@ const MAX_FAMILY_MEMBERS = 25;
 const MIN_SUM_YES = 0.85;
 const MAX_SUM_YES = 0.97;
 const DEFAULT_LEG_SIZE_USD = 4;
+// 2026-04-20: cap per-leg price to avoid partial-basket bleed. R&D data
+// (n=184, 19% WR, -$64 total) showed a clear split: tail legs < $0.10
+// earned +$37 on n=39, mid legs $0.25-$0.50 LOST -$127 on n=74. Hypothesis:
+// with equal-share basket sizing, mid-priced legs tie up enough capital
+// per leg that risk-engine caps reject later legs in the same family -
+// the basket math breaks when partial. Tails stay cheap enough that even
+// a partial basket is net-positive on accumulated tail wins across many
+// families. Full partial-basket diagnosis in docs/todo.md.
+const MAX_LEG_PRICE = 0.15;
 const DEDUP_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — don't re-stack same family
 
 export class NegRiskArbitrageStrategy extends BaseStrategy {
@@ -126,6 +135,13 @@ export class NegRiskArbitrageStrategy extends BaseStrategy {
       for (const m of members) sumYes += m.yes_price!;
 
       if (sumYes < MIN_SUM_YES || sumYes > MAX_SUM_YES) continue;
+
+      // 2026-04-20 partial-basket defense: skip families where any leg
+      // price exceeds MAX_LEG_PRICE. See R&D data analysis in the
+      // constant's comment above.
+      const maxLegPrice = Math.max(...members.map(m => m.yes_price!));
+      if (maxLegPrice > MAX_LEG_PRICE) continue;
+
       familiesInArbZone++;
 
       // Basket-level economics. An EXHAUSTIVE negrisk family guarantees

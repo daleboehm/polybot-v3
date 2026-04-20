@@ -658,6 +658,62 @@ ORDER BY r.strategy_id, sub_strategy_id, r.entity_slug,
               WHEN '48h' THEN 2
               WHEN '72h' THEN 3
               WHEN 'all_time' THEN 4 END;
+
+
+-- 2026-04-20: strategy checkpoint comparison view.
+-- Provides before/after split across our major change deployments so Dale
+-- can see the actual impact of fixes on realized PnL without waiting for
+-- full time windows to fill. Each checkpoint row compares resolutions
+-- closed BEFORE the change timestamp vs AFTER.
+--
+-- Checkpoints hardcoded per commit-deploy history. When new significant
+-- changes ship, add a row to the CHECKPOINTS CTE below.
+--
+-- Usage (dashboard): GROUP BY checkpoint, strategy_id, sub_strategy_id
+-- and pivot by era for side-by-side columns.
+CREATE VIEW IF NOT EXISTS v_strategy_checkpoints AS
+WITH checkpoints(checkpoint_label, checkpoint_at, description) AS (
+    VALUES
+        ('T1_fixes_2026-04-17',  '2026-04-17 06:00:00', 'Fix 1 Kelly alpha-boundary + Fix 4 weather 2x/hold-to-settle + fee-adjusted edge'),
+        ('T2_rd_back_2026-04-18', '2026-04-18 08:40:00', 'R&D back online + portfolio cap removed + edge threshold 0.02 to 0.005'),
+        ('T3_tranche2_2026-04-20','2026-04-20 16:00:00', 'ta_momentum + lifecycle filter + whale_fade + KL scout + cross-market-arb scout')
+),
+tagged AS (
+    SELECT
+        r.strategy_id,
+        COALESCE(r.sub_strategy_id, '') AS sub_strategy_id,
+        r.entity_slug,
+        c.checkpoint_label,
+        c.description,
+        CASE WHEN r.resolved_at < c.checkpoint_at THEN 'before' ELSE 'after' END AS era,
+        r.realized_pnl
+    FROM resolutions r
+    CROSS JOIN checkpoints c
+    WHERE r.strategy_id IS NOT NULL
+)
+SELECT
+    checkpoint_label,
+    description,
+    strategy_id,
+    sub_strategy_id,
+    entity_slug,
+    era,
+    COUNT(*) AS n,
+    SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+    SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) AS losses,
+    CASE WHEN SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)
+             + SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END) > 0
+         THEN ROUND(100.0 * SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)
+                  / (SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END)
+                     + SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END)), 1)
+         ELSE 0.0 END AS win_rate,
+    ROUND(SUM(realized_pnl), 4) AS total_pnl,
+    ROUND(SUM(realized_pnl) * 1.0 / COUNT(*), 4) AS avg_pnl_per_trade
+FROM tagged
+GROUP BY checkpoint_label, description, strategy_id, sub_strategy_id, entity_slug, era
+ORDER BY checkpoint_label, strategy_id, sub_strategy_id, entity_slug,
+         CASE era WHEN 'before' THEN 1 ELSE 2 END;
+
 `;
 
 export function applySchema(db: Database.Database): void {
@@ -738,6 +794,7 @@ export function applySchema(db: Database.Database): void {
   // 2026-04-10: added v_entity_pnl to the recreate set (W/L and win-rate fix).
   try {
     db.exec('DROP VIEW IF EXISTS v_strategy_performance');
+    db.exec('DROP VIEW IF EXISTS v_strategy_checkpoints');
     const stratDdl = DDL.match(/CREATE VIEW IF NOT EXISTS v_strategy_performance[\s\S]*?ORDER BY COALESCE\(s\.total_trades, 0\) DESC;/);
     if (stratDdl) {
       db.exec(stratDdl[0]);

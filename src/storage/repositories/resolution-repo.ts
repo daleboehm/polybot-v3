@@ -68,6 +68,34 @@ export function getStrategyRolling(entitySlug?: string): StrategyRollingRow[] {
   return db.prepare('SELECT * FROM v_strategy_rolling').all() as StrategyRollingRow[];
 }
 
+export interface StrategyCheckpointRow {
+  checkpoint_label: string;
+  description: string;
+  strategy_id: string;
+  sub_strategy_id: string;
+  entity_slug: string;
+  era: 'before' | 'after';
+  n: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl_per_trade: number;
+}
+
+// 2026-04-20: pre/post comparison across deployment checkpoints.
+// See v_strategy_checkpoints in schema.ts. Usage: pass entitySlug to filter
+// (typically 'rd-engine' for paper observability or 'polybot' for live).
+export function getStrategyCheckpoints(entitySlug?: string): StrategyCheckpointRow[] {
+  const db = getDatabase();
+  if (entitySlug) {
+    return db.prepare(
+      'SELECT * FROM v_strategy_checkpoints WHERE entity_slug = ?',
+    ).all(entitySlug) as StrategyCheckpointRow[];
+  }
+  return db.prepare('SELECT * FROM v_strategy_checkpoints').all() as StrategyCheckpointRow[];
+}
+
 export interface ResolutionRow {
   id: number;
   entity_slug: string;
