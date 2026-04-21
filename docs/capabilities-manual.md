@@ -93,6 +93,34 @@ Narrow applicability (only trigger on specific event-market categories), low pri
 - **Anthropic web_search wired into LlmNewsScout** (commit this session). Scout now actually has news context to reason from. Cost ~\$2-3/day for 144 ticks.
 - **Geopolitical anomaly feeds (FIRMS/OpenSky/USGS)**: NOT wired. Logged here for Dale review. Would only help if we actively trade those market categories; current entity allowlist doesn't prioritize them.
 
+## News/Social Tool List #3 (Glint/Alphascope/Kreo/PolySpy/etc.) — 2026-04-21
+
+### Dashboard/Observer tools — NOT engine-integrable (no public API)
+| Tool | Category | Why skip |
+|---|---|---|
+| Glint | Telegram push bot, military flight tracking | Telegram only; cannot programmatically consume |
+| Alphascope | AI news → probability shift calculator | Proprietary, no documented API |
+| Kreo | X feed viewer (Polymarket + Kalshi) | Frontend viewer, no API |
+| PolySpy | Telegram bot for new listings | Telegram only; we have our own NewListingScout |
+| Polylerts | Telegram whale tracker (up to 15 wallets) | Telegram only; we already have on-chain subscriber with 21 whales |
+| Polymarket Zone | Telegram group | Social, no programmatic access |
+| 0xperp's X list | X/Twitter curated trader list | Manual viewing only |
+| Polytrackerbot | X bot for whale activity | Observer only |
+| Stocktwits | Social network with integrated PM odds | Social, no API for our use case |
+| Polymarket Analytics / polymark.et | Graph annotations with live news (xAI) | Third-party, unclear API status, overlaps with our dashboard |
+| Finviz News RSS | Financial headlines | Superseded by Anthropic web_search (commit `f45d636`) |
+| Yahoo Finance RSS | Macro headlines | Same — web_search does targeted queries |
+
+### ACTIONABLE — one novel item
+| Source | What it enables | Status |
+|---|---|---|
+| **Polymarket RTDS WebSocket** (`wss://ws-live-data.polymarket.com`) | Real-time data stream distinct from our current CLOB WS (`wss://ws-subscriptions-clob.polymarket.com/ws/market`). Unclear without testing what additional payloads it carries — possibly live comments, market-discovery push, midpoint stream. | Referenced in `src/market/exchange-price-feeds.ts` comment as future-work but never wired. Investigate + possibly add as second WS connection. |
+
+### Decision
+- No new integrations shipped from this list.
+- **Polymarket RTDS WebSocket** logged as potentially useful, awaiting Dale review. Effort: S (~30 min to connect, inspect payloads, decide if worth keeping).
+- The social/Telegram tools are valuable for Dale's own manual observation (consider subscribing), but do not fit our engine architecture.
+
 ## 8a. Open Research Hypotheses + Decision Gates
 
 **2026-04-23: Weather forecast 72h validation verdict**
