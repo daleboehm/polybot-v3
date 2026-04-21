@@ -169,5 +169,4 @@ scouts:
   # category tag. The overlay code is left in place (returns NEUTRAL by
   # default — harmless). Re-enable after wiring a real news feed
   # (NewsAPI / Perplexity / web search) into the scout.
-  disabled_scouts:
-    - llm-news-scout
+  disabled_scouts: []  # llm-news-scout re-enabled 2026-04-21 with web_search tool

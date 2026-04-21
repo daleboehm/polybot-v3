@@ -345,7 +345,9 @@ export class LlmNewsScout extends ScoutBase {
       .join('\n');
 
     // System prompt is stable across ticks — we cache it via ephemeral.
-    const systemPrompt = `You are a prediction-market catalyst analyst. Your job is to scan a list of active Polymarket questions and flag any whose outcomes have been materially affected by news in the last 2 hours.
+    const systemPrompt = `You are a prediction-market catalyst analyst with web search access. Your job is to scan a list of active Polymarket questions and flag any whose outcomes have been materially affected by news in the last 2 hours.
+
+IMPORTANT: Before returning findings, use the web_search tool to look for recent news related to each market category. For each flagged finding, cite the specific source you searched in the reason field. Only flag markets where web_search returned genuinely recent (last 2h) catalysts — not general background.
 
 Return STRICT JSON with this exact shape, nothing else:
 
@@ -393,7 +395,14 @@ Evaluate each. Return findings JSON.`;
     // never block the scout indefinitely.
     const apiPromise = this.client.messages.create({
       model: MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: MAX_TOKENS * 3,
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 5,
+        },
+      ] as unknown as Anthropic.Messages.ToolUnion[],
       system: [
         {
           type: 'text',
@@ -413,10 +422,10 @@ Evaluate each. Return findings JSON.`;
     );
     const response = await Promise.race([apiPromise, timeoutPromise]);
 
-    // Extract text content (first text block)
-    const textBlock = response.content.find(
-      (c): c is Anthropic.TextBlock => c.type === 'text',
-    );
+    // Extract text content — after web_search tool use, the FINAL text block
+    // carries the JSON. Iterate in reverse to pick the last one.
+    const textBlocks = response.content.filter((c): c is Anthropic.TextBlock => c.type === 'text');
+    const textBlock = textBlocks.length > 0 ? textBlocks[textBlocks.length - 1] : undefined;
     if (!textBlock) {
       this.log.warn('LLM response had no text block');
       return [];

@@ -104,5 +104,4 @@ scouts:
   # The overlay code is left in place (harmless NEUTRAL default) so we can
   # re-enable when a real news feed is wired in. See docs/todo.md item for
   # the wire-up plan (NewsAPI / Perplexity / web search scout).
-  disabled_scouts:
-    - llm-news-scout
+  disabled_scouts: []  # llm-news-scout re-enabled 2026-04-21 with web_search tool

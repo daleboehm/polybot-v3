@@ -48,6 +48,51 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 2. R&D bandwidth for multi-week-resolution category
 3. Empirical backtest (Shanghai dataset) shows edge on oil threshold markets
 
+## Free Newswire/Data Feed Research — 2026-04-21
+
+Grok submitted a free-feed list (weather, news RSS, Polymarket native, geopolitical anomaly detection). Vetted against current capabilities:
+
+### Already wired (no action)
+| Source | Status in code |
+|---|---|
+| Open-Meteo ECMWF AIFS ensemble | `src/market/data-feeds.ts` `getEnsembleSpread()` |
+| NOAA NWS (US cities) | `src/market/data-feeds.ts` `getNWSForecast()` |
+| METAR/TAF (aviationweather.gov) | `src/market/data-feeds.ts` `getMETARObservation()` |
+| Polymarket Gamma API | `src/market/sampling-poller.ts` |
+| Polymarket CLOB WebSocket | `src/market/orderbook-websocket.ts` |
+| Binance crypto spot | `src/market/data-feeds.ts` `getBinancePrice()` |
+| FRED macro | `src/market/fred-client.ts` |
+| Kalshi CLOB | `src/market/kalshi-client.ts` |
+
+### Superseded by Anthropic web_search (shipped 2026-04-21)
+- CoinDesk/Cointelegraph/CryptoSlate/The Defiant RSS
+- NewsData.io free tier
+- Free Crypto News API
+- Google News / Yahoo / CNBC RSS
+- ChainGPT RSS, Coinfeeds API
+
+Claude's native `web_search_20250305` tool (now wired into LlmNewsScout) searches targeted queries per market category on each 10-min tick. This replaces the noisy broad-spectrum RSS aggregation approach Grok proposed. Better signal-to-noise, grounded citations, no separate ingestion pipeline.
+
+### NOT wired — genuinely novel candidates
+Narrow applicability (only trigger on specific event-market categories), low priority given current bankroll:
+
+| Source | What it enables | Effort | Priority |
+|---|---|---|---|
+| **NASA FIRMS** (thermal anomaly API, free) | Geopolitical escalation signals — fire spikes near conflict zones hours before news coverage | S-M | Medium — only helps if we trade Israel/Iran/Ukraine type markets |
+| **OpenSky Network** (live aircraft tracking, free) | Military/diplomatic signal — unusual flight patterns before tarmac news | S-M | Low — very narrow niche |
+| **USGS earthquake feed** (free, REST) | Natural-disaster event markets | S | Low — disaster markets on Polymarket are rare |
+| **Pyth Network** (crypto oracle, free public API) | Cross-oracle arb vs Chainlink | M | DEFERRED (see oracle-lag entry in 8b) |
+| **NOAA GFS direct S3 (AWS Open Data)** | GFS ensemble members beyond Open-Meteo's 51 AIFS members | M | Low — AIFS already 20% more accurate than legacy GFS |
+
+### Dismissed as hype
+- "Weather bots turning \$1k into \$24k-65k" — survivorship examples, not reproducible edge
+- "$100k+ in 30min" claims in YouTube wrappers
+- Generic "signal stack" framing — we already have the architecture, just need the signals
+
+### Action taken 2026-04-21
+- **Anthropic web_search wired into LlmNewsScout** (commit this session). Scout now actually has news context to reason from. Cost ~\$2-3/day for 144 ticks.
+- **Geopolitical anomaly feeds (FIRMS/OpenSky/USGS)**: NOT wired. Logged here for Dale review. Would only help if we actively trade those market categories; current entity allowlist doesn't prioritize them.
+
 ## 8a. Open Research Hypotheses + Decision Gates
 
 **2026-04-23: Weather forecast 72h validation verdict**
