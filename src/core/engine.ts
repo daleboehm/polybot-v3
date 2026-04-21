@@ -35,6 +35,7 @@ import { SportsbookFadeStrategy } from '../strategy/custom/sportsbook-fade.js';
 import { CrossMarketDivergenceStrategy } from '../strategy/custom/cross-market-divergence.js';
 import { MacroForecastStrategy } from '../strategy/custom/macro-forecast.js';
 import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
+import { startRtds, stopRtds } from '../market/polymarket-rtds.js';
 import { WhaleFadeStrategy } from '../strategy/custom/whale-fade.js';
 import { NegRiskArbitrageStrategy } from '../strategy/custom/negrisk-arbitrage.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
@@ -416,6 +417,9 @@ export class Engine {
       });
       this.scoutCoordinator.start(this.marketCache);
     }
+
+    // Polymarket RTDS (real-time equity/FX/commodity prices) — 2026-04-21
+    startRtds();
 
     // Phase C1c (2026-04-11): whale event subscriber. DORMANT by default.
     // Only starts when:
