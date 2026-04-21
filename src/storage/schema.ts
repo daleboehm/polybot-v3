@@ -677,6 +677,7 @@ WITH checkpoints(checkpoint_label, checkpoint_at, description) AS (
         ('T1_fixes_2026-04-17',  '2026-04-17 06:00:00', 'Fix 1 Kelly alpha-boundary + Fix 4 weather 2x/hold-to-settle + fee-adjusted edge'),
         ('T2_rd_back_2026-04-18', '2026-04-18 08:40:00', 'R&D back online + portfolio cap removed + edge threshold 0.02 to 0.005'),
         ('T3_tranche2_2026-04-20','2026-04-20 16:00:00', 'ta_momentum + lifecycle filter + whale_fade + KL scout + cross-market-arb scout')
+        ,('T4_clean_era_2026-04-21','2026-04-21 14:00:00', 'All fixes active: Fix 1 Kelly + favorites 0.70 floor + fee-adjusted edge + METAR + ta_momentum + lifecycle filter + negrisk MAX_LEG_PRICE + complete-set-arb scout + tight prod caps')
 ),
 tagged AS (
     SELECT

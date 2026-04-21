@@ -25,6 +25,29 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 
 **Other 15 entities**: all paper + pending + \$0 — no wrap needed for any of them today.
 
+## Oil quant-discretization research — 2026-04-21
+
+**Market category**: CONFIRMED active on Polymarket. R&D cache shows ~20 active oil markets:
+- Crude Oil (CL) price threshold markets: "Will Crude Oil hit $X by end of June?" for X in {47, 52, 77-84, 120, 150, 115, 175, 200}
+- US crude oil reserves inventory markets
+- Venezuelan crude oil production markets
+- Oil-related geopolitical markets (Iran/Abqaiq, oil tanker events)
+
+**Already covered by existing scout**: `cross-market-arb-scout` (commit `c9da66b`) auto-scans the CL price-threshold cluster for monotonicity violations ($47/$52/$77/$120/$150/$175/$200 priced in-order). If an inversion appears, it's flagged regardless of asset — no oil-specific code needed for arb detection.
+
+**Oil-specific forecasting strategy (Grok's "harmonic oscillator" pitch)**:
+- Mechanism: fit mean-reversion model to WTI 30d history, compute P(max price > threshold within window Y), compare to market-implied P.
+- Simpler alternative: empirical volatility × normal CDF (same approach as `crypto_price/latency_arb`).
+- Data feed options: Yahoo Finance WTI (free, 15min delay — fine for monthly markets), EIA (free, daily), Alpha Vantage (rate-limited free).
+- **NOT built**. Effort: M (data feed + model + strategy = ~4-6h).
+
+**Deferral reason**: (a) cross-market-arb-scout already captures the arb pattern — Grok's pitch conflated arb with forecasting; (b) oil markets resolve weeks-to-months out, outside our current `max_hours_to_resolve: 48` window, so a directional oil strategy would need to be a new sub with relaxed resolution gating; (c) current bankroll ($374) cannot meaningfully size into a slow-resolution market.
+
+**Reopen criteria**:
+1. Prod unhalted successfully on V2
+2. R&D bandwidth for multi-week-resolution category
+3. Empirical backtest (Shanghai dataset) shows edge on oil threshold markets
+
 ## 8a. Open Research Hypotheses + Decision Gates
 
 **2026-04-23: Weather forecast 72h validation verdict**

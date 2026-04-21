@@ -31,9 +31,9 @@ risk:
   # with a written pre-commit in this comment block.
   # ═══════════════════════════════════════════════════════════════════
   max_position_pct: 0.10          # 10% of equity per position (marathon, RE-TIGHTENED from sprint 0.25)
-  max_position_usd: 100.00        # absolute per-position cap — sized for $1K recap
+  max_position_usd: 25.00         # absolute per-position cap (2026-04-21 right-sized for current $374 prod balance: 6.7% max per position)
   fractional_kelly: 0.25          # quarter-Kelly (RE-TIGHTENED from sprint 0.50) — see Fix 1 re: stability
-  daily_loss_lockout_usd: 50.00   # catastrophic floor — raised from $20 so one bad day doesn't halt on $1K
+  daily_loss_lockout_usd: 15.00   # catastrophic floor (2026-04-21 tightened: 4% daily loss limit on $374)
   stop_loss_pct: 0.20
   hard_stop_usd: 5.00
   profit_target_pct: 0.40

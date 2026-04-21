@@ -1303,4 +1303,204 @@ program
     closeDatabase();
   });
 
+// ─── wrap-usdc (2026-04-21 V2 cutover prep) ───────────────────────
+// One-off wrap USDC.e -> pUSD via verified Polymarket CollateralOnramp.
+// Verified 2026-04-21: contract at 0x93070a847efEf7F70739046A929D47a521F5B8ee
+// has WRAPPER_ROLE on pUSD + exposes wrap(address,address,uint256).
+program
+  .command('wrap-usdc')
+  .description('Wrap USDC.e -> pUSD via Polymarket V2 CollateralOnramp')
+  .requiredOption('--entity <slug>', 'Entity slug (e.g. polybot)')
+  .requiredOption('--amount <usd>', 'USD amount to wrap (e.g. 373.62)')
+  .option('--dry-run', 'Show tx data without submitting', false)
+  .action(async (opts: { entity: string; amount: string; dryRun?: boolean }) => {
+    const ONRAMP = '0x93070a847efEf7F70739046A929D47a521F5B8ee' as `0x${string}`;
+    const USDCE = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174' as `0x${string}`;
+    const PUSD = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB' as `0x${string}`;
+
+    const config = loadConfig();
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) { console.error(`Entity ${opts.entity} not found in config`); process.exit(1); }
+
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key) { console.error(`no wallet credentials for ${opts.entity}`); process.exit(1); }
+
+    const { createWalletClient, createPublicClient, http, parseAbi, parseUnits, formatUnits } = await import('viem');
+    const { polygon } = await import('viem/chains');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { getPrimaryRpc } = await import('../market/rpc-config.js');
+
+    const pkHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const account = privateKeyToAccount(pkHex);
+    const transport = http(getPrimaryRpc());
+    const walletClient = createWalletClient({ account, chain: polygon, transport });
+    const publicClient = createPublicClient({ chain: polygon, transport });
+
+    const amount = parseUnits(opts.amount, 6);
+    const erc20Abi = parseAbi([
+      'function balanceOf(address) view returns (uint256)',
+      'function allowance(address owner, address spender) view returns (uint256)',
+      'function approve(address spender, uint256 amount) returns (bool)',
+    ]);
+    const onrampAbi = parseAbi(['function wrap(address _asset, address _to, uint256 _amount)']);
+
+    const usdceBalance = await publicClient.readContract({ address: USDCE, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    const pusdBalance = await publicClient.readContract({ address: PUSD, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    const allowance = await publicClient.readContract({ address: USDCE, abi: erc20Abi, functionName: 'allowance', args: [account.address, ONRAMP] });
+
+    console.log('=== wrap-usdc preflight ===');
+    console.log(`wallet:        ${account.address}`);
+    console.log(`USDC.e bal:    ${formatUnits(usdceBalance as bigint, 6)}`);
+    console.log(`pUSD bal:      ${formatUnits(pusdBalance as bigint, 6)}`);
+    console.log(`ONRAMP allow:  ${formatUnits(allowance as bigint, 6)}`);
+    console.log(`wrap amount:   ${opts.amount} (${amount.toString()} raw units)`);
+
+    if ((usdceBalance as bigint) < amount) {
+      console.error(`ERROR: insufficient USDC.e (have ${formatUnits(usdceBalance as bigint, 6)}, need ${opts.amount})`);
+      process.exit(1);
+    }
+
+    const needsApprove = (allowance as bigint) < amount;
+    console.log(`needs approve: ${needsApprove}`);
+
+    if (opts.dryRun) {
+      console.log('');
+      console.log('=== DRY RUN — no transactions submitted ===');
+      if (needsApprove) console.log(`  tx1: USDCE.approve(${ONRAMP}, ${amount.toString()})`);
+      console.log(`  tx${needsApprove ? '2' : '1'}: ONRAMP.wrap(${USDCE}, ${account.address}, ${amount.toString()})`);
+      console.log('');
+      console.log('Re-run without --dry-run to execute.');
+      return;
+    }
+
+    if (needsApprove) {
+      console.log('\n=== Step 1: approve USDC.e spend ===');
+      const hash1 = await walletClient.writeContract({ address: USDCE, abi: erc20Abi, functionName: 'approve', args: [ONRAMP, amount] });
+      console.log(`approve tx: ${hash1}`);
+      const rcpt1 = await publicClient.waitForTransactionReceipt({ hash: hash1 });
+      console.log(`approve status: ${rcpt1.status}, block: ${rcpt1.blockNumber}`);
+      if (rcpt1.status !== 'success') { console.error('approve failed'); process.exit(1); }
+    } else {
+      console.log('\n=== Step 1: approve skipped (allowance already sufficient) ===');
+    }
+
+    console.log('\n=== Step 2: wrap USDC.e -> pUSD ===');
+    const hash2 = await walletClient.writeContract({ address: ONRAMP, abi: onrampAbi, functionName: 'wrap', args: [USDCE, account.address, amount] });
+    console.log(`wrap tx: ${hash2}`);
+    const rcpt2 = await publicClient.waitForTransactionReceipt({ hash: hash2 });
+    console.log(`wrap status: ${rcpt2.status}, block: ${rcpt2.blockNumber}`);
+
+    const usdceAfter = await publicClient.readContract({ address: USDCE, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    const pusdAfter = await publicClient.readContract({ address: PUSD, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    console.log('\n=== post-wrap balances ===');
+    console.log(`USDC.e: ${formatUnits(usdceAfter as bigint, 6)}`);
+    console.log(`pUSD:   ${formatUnits(pusdAfter as bigint, 6)}`);
+    console.log('');
+    console.log(rcpt2.status === 'success' ? 'WRAP SUCCESSFUL' : 'WRAP FAILED');
+  });
+
+// ─── v2-activate (2026-04-21 post-cutover setup) ──────────────────
+// Orchestrates the V2 activation approvals for a wallet:
+//   1. Verify pUSD balance > 0 (else run wrap-usdc first)
+//   2. setApprovalForAll(CTF_Exchange_V2, true) on Conditional Tokens
+//   3. setApprovalForAll(NegRisk_Exchange_V2, true) on Conditional Tokens
+// Without these setApprovalForAll grants, V2 orders will be rejected when
+// the exchange tries to move position tokens during matching.
+// Verified contract addresses per docs.polymarket.com/resources/contract-addresses.
+program
+  .command('v2-activate')
+  .description('Set V2 approvals on a wallet (setApprovalForAll for CTF V2 + NegRisk V2)')
+  .requiredOption('--entity <slug>', 'Entity slug (e.g. polybot)')
+  .option('--dry-run', 'Show tx data without submitting', false)
+  .action(async (opts: { entity: string; dryRun?: boolean }) => {
+    const CTF_V2 = '0xE111180000d2663C0091e4f400237545B87B996B' as `0x${string}`;
+    const NEG_RISK_V2 = '0xe2222d279d744050d28e00520010520000310F59' as `0x${string}`;
+    const CONDITIONAL_TOKENS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045' as `0x${string}`;
+    const PUSD = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB' as `0x${string}`;
+
+    const config = loadConfig();
+    const entityCfg = config.entities.find(e => e.slug === opts.entity);
+    if (!entityCfg) { console.error(`Entity \${opts.entity} not found`); process.exit(1); }
+
+    const { loadWalletCredentials } = await import('../entity/wallet-loader.js');
+    const creds = loadWalletCredentials(entityCfg.entity_path);
+    if (!creds || !creds.private_key) { console.error(`no wallet credentials for \${opts.entity}`); process.exit(1); }
+
+    const { createWalletClient, createPublicClient, http, parseAbi, formatUnits } = await import('viem');
+    const { polygon } = await import('viem/chains');
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { getPrimaryRpc } = await import('../market/rpc-config.js');
+
+    const pkHex = creds.private_key.startsWith('0x')
+      ? creds.private_key as `0x${string}`
+      : `0x${creds.private_key}` as `0x${string}`;
+    const account = privateKeyToAccount(pkHex);
+    const transport = http(getPrimaryRpc());
+    const walletClient = createWalletClient({ account, chain: polygon, transport });
+    const publicClient = createPublicClient({ chain: polygon, transport });
+
+    const erc20Abi = parseAbi(['function balanceOf(address) view returns (uint256)']);
+    const ctfAbi = parseAbi([
+      'function isApprovedForAll(address owner, address operator) view returns (bool)',
+      'function setApprovalForAll(address operator, bool approved)',
+    ]);
+
+    // Preflight: pUSD balance
+    const pusd = await publicClient.readContract({ address: PUSD, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    const ctfV2Approved = await publicClient.readContract({ address: CONDITIONAL_TOKENS, abi: ctfAbi, functionName: 'isApprovedForAll', args: [account.address, CTF_V2] });
+    const negRiskV2Approved = await publicClient.readContract({ address: CONDITIONAL_TOKENS, abi: ctfAbi, functionName: 'isApprovedForAll', args: [account.address, NEG_RISK_V2] });
+
+    console.log('=== v2-activate preflight ===');
+    console.log(`wallet:                        \${account.address}`);
+    console.log(`pUSD balance:                  \${formatUnits(pusd as bigint, 6)}`);
+    console.log(`CTF V2 approved?               \${ctfV2Approved}`);
+    console.log(`NegRisk V2 approved?           \${negRiskV2Approved}`);
+
+    if ((pusd as bigint) === 0n) {
+      console.error('\nERROR: pUSD balance is zero. Run `polybot wrap-usdc --entity \${opts.entity} --amount <usd>` first.');
+      process.exit(1);
+    }
+
+    const needsCtfV2 = !ctfV2Approved;
+    const needsNegRiskV2 = !negRiskV2Approved;
+    const txCount = (needsCtfV2 ? 1 : 0) + (needsNegRiskV2 ? 1 : 0);
+
+    if (txCount === 0) {
+      console.log('\nAll V2 approvals already in place. Wallet is ready for V2 trading.');
+      return;
+    }
+
+    if (opts.dryRun) {
+      console.log('\n=== DRY RUN — no transactions submitted ===');
+      if (needsCtfV2) console.log(`  tx: CONDITIONAL_TOKENS.setApprovalForAll(\${CTF_V2}, true)`);
+      if (needsNegRiskV2) console.log(`  tx: CONDITIONAL_TOKENS.setApprovalForAll(\${NEG_RISK_V2}, true)`);
+      console.log('\nRe-run without --dry-run to execute.');
+      return;
+    }
+
+    // Execute
+    if (needsCtfV2) {
+      console.log('\n=== setApprovalForAll CTF V2 ===');
+      const h = await walletClient.writeContract({ address: CONDITIONAL_TOKENS, abi: ctfAbi, functionName: 'setApprovalForAll', args: [CTF_V2, true] });
+      console.log(`tx: \${h}`);
+      const r = await publicClient.waitForTransactionReceipt({ hash: h });
+      console.log(`status: \${r.status}, block: \${r.blockNumber}`);
+      if (r.status !== 'success') { console.error('CTF V2 approval failed'); process.exit(1); }
+    }
+    if (needsNegRiskV2) {
+      console.log('\n=== setApprovalForAll NegRisk V2 ===');
+      const h = await walletClient.writeContract({ address: CONDITIONAL_TOKENS, abi: ctfAbi, functionName: 'setApprovalForAll', args: [NEG_RISK_V2, true] });
+      console.log(`tx: \${h}`);
+      const r = await publicClient.waitForTransactionReceipt({ hash: h });
+      console.log(`status: \${r.status}, block: \${r.blockNumber}`);
+      if (r.status !== 'success') { console.error('NegRisk V2 approval failed'); process.exit(1); }
+    }
+
+    console.log('\n=== V2 ACTIVATION COMPLETE ===');
+    console.log('Wallet is ready for V2 order placement once config exchange_version=v2.');
+  });
+
 program.parse();
