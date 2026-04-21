@@ -6,6 +6,25 @@ Maintained by operator. SSH-edit at `/opt/polybot-v3/docs/capabilities-manual.md
 
 ---
 
+## V2 Migration Status — 2026-04-21 (cutover day)
+
+**Completed today:**
+- `clob-client-v2@1.0.0` installed (already in package.json)
+- `clob-router.ts` v2 path validated (exchange_version flag switch)
+- `whale-event-subscriber.ts` patched: V2 exchange addresses + V2 OrderFilled ABI + dual-watch (V1+V2)
+- `cli/index.ts` sell-position + redeem paths v2-aware
+- **R&D flipped to v2** (paper mode, validates client init)
+- pUSD token identified: `0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`
+- V2 Exchange + NegRiskExchangeV2 confirmed on-chain deployed
+
+**BLOCKED — waiting on Polymarket support:**
+- pUSD onramp contract address. `CollateralToken.wrap()` requires `WRAPPER_ROLE`. User-facing wrapper contract not yet publicly documented. Polygonscan, GitHub, and docs.polymarket.com searches came up empty. Asked Polymarket Discord for the onramp address.
+- Once known: build `polybot wrap-usdc` CLI, dry-run, execute on polybot wallet ($373.62 USDC.e → pUSD), flip prod config to v2.
+
+**Prod stays halted + V1 until wrap completes.** No trading risk during the transition.
+
+**Other 15 entities**: all paper + pending + \$0 — no wrap needed for any of them today.
+
 ## 8a. Open Research Hypotheses + Decision Gates
 
 **2026-04-23: Weather forecast 72h validation verdict**
