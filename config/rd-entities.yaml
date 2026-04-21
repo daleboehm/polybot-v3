@@ -23,6 +23,7 @@ entities:
       - weather_forecast
       - crypto_price
       - whale_fade
+      - rtds_forecast
       - favorites
       - longshot
       - convergence
