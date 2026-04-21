@@ -62,7 +62,7 @@ api:
   rate_limit_per_second: 10
   # 2026-04-16 CTF Exchange V2 scaffolding — see default.yaml for the full
   # comment + migration plan at docs/ctf-exchange-v2-migration-plan-2026-04-16.md
-  exchange_version: v1
+  exchange_version: v2
 
 dashboard:
   port: 9200

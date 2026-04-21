@@ -62,11 +62,20 @@ const log = createChildLogger('whale-event-subscriber');
 // Polymarket contracts on Polygon (from Agent 3 research + verified)
 const CTF_EXCHANGE: Hex = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 const NEG_RISK_CTF_EXCHANGE: Hex = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
+// 2026-04-21 CTF V2 cutover — watch BOTH V1 and V2 exchanges during transition.
+// V1 stops emitting after cutover; V2 takes over. Keeping V1 in the watch
+// list is harmless (no events) and covers any lingering pre-cutover fills.
+const CTF_EXCHANGE_V2: Hex = '0xE111180000d2663C0091e4f400237545B87B996B';
+const NEG_RISK_CTF_EXCHANGE_V2: Hex = '0xe2222d279d744050d28e00520010520000310F59';
 
-// OrderFilled event (both exchanges emit this)
-// Simplified ABI for log parsing. Real event has 5 indexed args + data.
+// OrderFilled event — V1 (pre-2026-04-21 cutover). Separate maker/takerAssetId fields.
 const ORDER_FILLED_EVENT = parseAbiItem(
   'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint256 makerAssetId, uint256 takerAssetId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
+);
+// OrderFilled event — V2 (2026-04-21+). Drops separate asset IDs, unifies to side+tokenId.
+// Derived from @polymarket/clob-client-v2 ExchangeV2 ABI.
+const ORDER_FILLED_EVENT_V2 = parseAbiItem(
+  'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed taker, uint8 side, uint256 tokenId, uint256 makerAmountFilled, uint256 takerAmountFilled, uint256 fee)',
 );
 
 import { getPolygonRpcs } from './rpc-config.js';
@@ -203,14 +212,21 @@ export class WhaleEventSubscriber {
       const CHUNK_SIZE = 8n; // conservative — Alchemy free caps at 10
       const logs: Log[] = [];
       let chunkFailed = false;
-      for (const contract of [CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE]) {
+      // 2026-04-21: scan V1 + V2 exchanges with their respective event ABIs.
+      const watchList = [
+        { addr: CTF_EXCHANGE, event: ORDER_FILLED_EVENT },
+        { addr: NEG_RISK_CTF_EXCHANGE, event: ORDER_FILLED_EVENT },
+        { addr: CTF_EXCHANGE_V2, event: ORDER_FILLED_EVENT_V2 },
+        { addr: NEG_RISK_CTF_EXCHANGE_V2, event: ORDER_FILLED_EVENT_V2 },
+      ];
+      for (const { addr: contract, event: eventDef } of watchList) {
         let chunkFrom = fromBlock;
         while (chunkFrom <= toBlock) {
           const chunkTo = chunkFrom + CHUNK_SIZE > toBlock ? toBlock : chunkFrom + CHUNK_SIZE;
           try {
             const contractLogs = await client.getLogs({
               address: contract,
-              event: ORDER_FILLED_EVENT,
+              event: eventDef,
               fromBlock: chunkFrom,
               toBlock: chunkTo,
             });

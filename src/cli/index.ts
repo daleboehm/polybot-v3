@@ -898,9 +898,12 @@ program
       process.exit(0);
     }
 
-    // Initialize the CLOB client for sell orders
-    // Dynamic import of the CLOB client + its Side enum + viem for signing.
-    const mod = await import('@polymarket/clob-client');
+    // 2026-04-21 V2-aware. V2 = named-options constructor; V1 = positional.
+    // Post-cutover prod + R&D run on v2. Pre-cutover, v1. Controlled by config.
+    const useV2 = config.api.exchange_version === 'v2';
+    const mod = useV2
+      ? await import('@polymarket/clob-client-v2')
+      : await import('@polymarket/clob-client');
     const { ClobClient } = mod;
     const { createWalletClient, http } = await import('viem');
     const { polygon } = await import('viem/chains');
@@ -915,16 +918,11 @@ program
       chain: polygon,
       transport: http(getPrimaryRpc()),
     });
-    const client = new ClobClient(
-      config.api.clob_base_url,
-      137,
-      walletClient,
-      {
-        key: creds.api_key,
-        secret: creds.api_secret,
-        passphrase: creds.api_passphrase,
-      },
-    );
+    const creds_ = { key: creds.api_key, secret: creds.api_secret, passphrase: creds.api_passphrase };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client: any = useV2
+      ? new (ClobClient as any)({ host: config.api.clob_base_url, chain: 137, signer: walletClient, creds: creds_ })
+      : new (ClobClient as any)(config.api.clob_base_url, 137, walletClient, creds_);
 
     let sold = 0;
     let failed = 0;
@@ -1203,7 +1201,11 @@ program
       process.exit(1);
     }
 
-    const mod = await import('@polymarket/clob-client');
+    // 2026-04-21 V2-aware (second CLI instantiation)
+    const useV2_r = config.api.exchange_version === 'v2';
+    const mod = useV2_r
+      ? await import('@polymarket/clob-client-v2')
+      : await import('@polymarket/clob-client');
     const { ClobClient } = mod;
     const { createWalletClient: cwc, http: httpTransport } = await import('viem');
     const { polygon: poly } = await import('viem/chains');
@@ -1215,12 +1217,11 @@ program
       : `0x${creds.private_key}` as `0x${string}`;
     const acc = pka(pkHex);
     const wc = cwc({ account: acc, chain: poly, transport: httpTransport(getPrimaryRpc()) });
-    const clobClient = new ClobClient(
-      config.api.clob_base_url,
-      137,
-      wc,
-      { key: creds.api_key, secret: creds.api_secret, passphrase: creds.api_passphrase },
-    );
+    const creds_r = { key: creds.api_key, secret: creds.api_secret, passphrase: creds.api_passphrase };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clobClient: any = useV2_r
+      ? new (ClobClient as any)({ host: config.api.clob_base_url, chain: 137, signer: wc, creds: creds_r })
+      : new (ClobClient as any)(config.api.clob_base_url, 137, wc, creds_r);
 
     let placed = 0;
     let failed = 0;
