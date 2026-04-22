@@ -24,6 +24,7 @@ entities:
       - crypto_price
       - whale_fade
       - rtds_forecast
+      - maker_rebate
       - favorites
       - longshot
       - convergence

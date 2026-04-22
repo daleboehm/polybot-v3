@@ -6,7 +6,7 @@ import { BaseStrategy, type StrategyContext } from '../strategy-interface.js';
 import type { Signal, MarketData } from '../../types/index.js';
 import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
-import { getNWSForecast, getEnsembleSpread, getMETARObservation } from '../../market/data-feeds.js';
+import { getNWSForecast, getEnsembleSpread, getMETARObservation, getHRRRForecast } from '../../market/data-feeds.js';
 import { getFeeRateFromTags, feeAdjustedEdge } from '../../utils/math.js';
 
 const log = createChildLogger('strategy:weather');
@@ -168,6 +168,18 @@ export class WeatherForecastStrategy extends BaseStrategy {
         forecast.high_c = (forecast.high_f - 32) * 5 / 9;
       }
 
+      // 2026-04-21: HRRR (NOAA High-Resolution Rapid Refresh, CONUS 3km).
+      // Free via Open-Meteo. Better short-horizon precision than AIFS for
+      // US cities. Blend for <48h US forecasts; falls through if non-US.
+      const hrrr = await getHRRRForecast(parsed.city);
+      if (hrrr && hrrr.high_f > 0 && hoursToResolve < 48) {
+        const hrrrWeight = hoursToResolve < 12 ? 0.4 : hoursToResolve < 24 ? 0.3 : 0.2;
+        forecast.high_f = forecast.high_f * (1 - hrrrWeight) + hrrr.high_f * hrrrWeight;
+        forecast.low_f = forecast.low_f * (1 - hrrrWeight) + hrrr.low_f * hrrrWeight;
+        forecast.high_c = (forecast.high_f - 32) * 5 / 9;
+        forecast.low_c = (forecast.low_f - 32) * 5 / 9;
+      }
+
       // Score the market (shared across all sub-strategies)
       const score = this.scoreMarket(market, parsed, forecast, hoursToResolve);
 
@@ -219,7 +231,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
         fee_rate: feeRate,
         raw_edge: Math.abs(score.edge),
         fee_adjusted_edge: adjEdge,
-        data_sources: [nws ? 'NWS' : null, 'Open-Meteo', ensemble ? 'ECMWF-Ensemble' : null, metar ? 'METAR' : null].filter(Boolean),
+        hrrr_high: hrrr?.high_f, hrrr_low: hrrr?.low_f, data_sources: [nws ? 'NWS' : null, 'Open-Meteo', ensemble ? 'ECMWF-Ensemble' : null, metar ? 'METAR' : null, hrrr ? 'HRRR' : null].filter(Boolean),
         hold_to_settlement: holdToSettlement,
       };
 

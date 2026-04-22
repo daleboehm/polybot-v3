@@ -99,13 +99,17 @@ export class ClobRouter {
     // Get market info for neg_risk flag
     const market = this.marketCache.get(order.condition_id);
 
-    // Submit order via CLOB
+    // Submit order via CLOB. post_only flag from order metadata — used
+    // by maker_rebate and future market-making strategies to earn rebates
+    // instead of paying taker fees.
+    const orderPostOnly = ((order as unknown as { metadata?: Record<string, unknown> }).metadata?.post_only === true);
     const result = await client.placeOrder(
       order.token_id,
       order.side,
       order.price,
       order.size,
       market?.neg_risk ?? false,
+      orderPostOnly,
     );
 
     if (!result.success) {
@@ -239,6 +243,7 @@ class ClobClientWrapper {
     price: number,
     size: number,
     negRisk: boolean,
+      postOnly: boolean = false,
   ): Promise<{ success: boolean; order_id?: string; tx_hash?: string; error?: string }> {
     try {
       const client = await this.getClient();
@@ -269,7 +274,7 @@ class ClobClientWrapper {
       const signedOrder = await client.createOrder(userOrder, options);
 
       // Post to CLOB
-      const response = await client.postOrder(signedOrder);
+      const response = await client.postOrder(signedOrder, undefined, undefined, postOnly ?? false);
 
       log.info({
         response: typeof response === 'object' ? JSON.stringify(response).substring(0, 200) : String(response),

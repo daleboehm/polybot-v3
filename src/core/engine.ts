@@ -38,6 +38,7 @@ import { WhaleCopyStrategy } from '../strategy/custom/whale-copy.js';
 import { startRtds, stopRtds } from '../market/polymarket-rtds.js';
 import { WhaleFadeStrategy } from '../strategy/custom/whale-fade.js';
 import { RtdsForecastStrategy } from '../strategy/custom/rtds-forecast.js';
+import { MakerRebateStrategy } from '../strategy/custom/maker-rebate.js';
 import { NegRiskArbitrageStrategy } from '../strategy/custom/negrisk-arbitrage.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { FastCryptoEvaluator } from './fast-crypto-evaluator.js';
@@ -159,6 +160,7 @@ export class Engine {
     this.strategyRegistry.register(new WhaleCopyStrategy());
     this.strategyRegistry.register(new WhaleFadeStrategy());
     this.strategyRegistry.register(new RtdsForecastStrategy());
+    this.strategyRegistry.register(new MakerRebateStrategy());
 
     // 2026-04-16 Fix 3: NegRisk combinatorial arbitrage scanner. Groups active
     // markets by neg_risk_market_id, fires one BUY signal per family member

@@ -186,6 +186,71 @@ interface EnsembleResponse {
   };
 }
 
+// ─── 2b. NOAA HRRR (High-Resolution Rapid Refresh, CONUS 3km hourly) ─
+//
+// NOAA HRRR via Open-Meteo proxy. 3km resolution over Continental US,
+// hourly updates. Complements the AIFS ensemble (global, 50 members)
+// with much tighter short-horizon resolution for US weather markets.
+// Best signal for same-day and next-day US forecasts; falls through to
+// AIFS for non-US or >48h horizons.
+//
+// Grok research 2026-04-21 + openclaw-weather GitHub ref.
+
+interface HRRRForecast {
+  city: string;
+  high_f: number;
+  low_f: number;
+  hours_forecast: number[]; // next 24h hourly temps in F for diagnostics
+  fetched_at: number;
+}
+
+const hrrrCache = new Map<string, HRRRForecast>();
+const HRRR_CACHE_TTL = 30 * 60 * 1000; // 30 min — HRRR updates hourly
+
+export async function getHRRRForecast(city: string): Promise<HRRRForecast | null> {
+  const key = city.toLowerCase();
+  const cached = hrrrCache.get(key);
+  if (cached && (Date.now() - cached.fetched_at) < HRRR_CACHE_TTL) return cached;
+
+  // HRRR is CONUS-only — use CITY_COORDS (already restricted to major US cities in NWS block)
+  const coords = CITY_COORDS[key];
+  if (!coords) return null;
+  // Coarse US-bounding-box filter — lat 24.5-49.5, lon -125 to -66
+  if (coords[0] < 24.5 || coords[0] > 49.5 || coords[1] < -125 || coords[1] > -66) return null;
+
+  try {
+    // Open-Meteo HRRR endpoint. Hourly temp_2m forecast next 48h.
+    const url = "https://api.open-meteo.com/v1/forecast?latitude=" + coords[0] + "&longitude=" + coords[1] + "&hourly=temperature_2m&forecast_days=2&temperature_unit=fahrenheit&timezone=auto&models=noaa_hrrr";
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return null;
+
+    const data = await response.json() as { hourly?: { temperature_2m?: number[] } };
+    const hours = data.hourly?.temperature_2m;
+    if (!hours || !Array.isArray(hours) || hours.length < 24) return null;
+
+    // Today = first 24 hourly readings. High/low = extrema across them.
+    const today = hours.slice(0, 24).filter(v => typeof v === 'number');
+    if (today.length === 0) return null;
+    const high_f = Math.max(...today);
+    const low_f = Math.min(...today);
+
+    const forecast: HRRRForecast = {
+      city: key,
+      high_f,
+      low_f,
+      hours_forecast: today,
+      fetched_at: Date.now(),
+    };
+    hrrrCache.set(key, forecast);
+    log.debug({ city: key, high_f, low_f, hours: today.length }, 'HRRR forecast fetched');
+    return forecast;
+  } catch (err) {
+    log.debug({ city: key, err }, 'HRRR fetch failed');
+    return null;
+  }
+}
+
+
 // ─── 3. BINANCE CRYPTO PRICES (real-time via REST) ───────────────────
 
 interface CryptoPrice {
