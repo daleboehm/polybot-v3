@@ -1,0 +1,102 @@
+# R&D Engine configuration — faster scan cycle, same risk params, paper only
+engine:
+  scan_interval_ms: 120000        # 2 minutes — faster iteration for R&D
+  snapshot_interval_ms: 1800000   # 30 minutes
+  risk_check_interval_ms: 60000
+  # 2026-04-13: enabled for R&D so the FastCryptoEvaluator runs on both
+  # engines. R&D paper-sim uses book data for maker fill gating, and the
+  # fast evaluator gives R&D the same 10-second BTC reaction as prod.
+  orderbook_subscribe: true
+  max_concurrent_orders: 20        # Higher for R&D — paper trades are cheap
+  log_level: info
+
+risk:
+  # 2026-04-10: max_positions / reserve_ratio / trading_ratio removed from schema.
+  # "Only limit is cash." Sizing self-bounds via Kelly + max_position_pct +
+  # max_position_usd. When reserves come back, it'll be via the central-node
+  # sweep pattern, not these knobs.
+  max_position_pct: 0.05           # 5% per position — still enforced as a Kelly hard ceiling
+  max_position_usd: 10.00          # Smaller paper positions for broader coverage. $10K / $10 = 1000
+                                   # slots, enough room for every sub-strategy to accumulate data
+                                   # before cash binds.
+  fractional_kelly: 0.25
+  daily_loss_lockout_usd: 500.00   # High lockout — don't want R&D stopping itself
+  stop_loss_pct: 0.20
+  hard_stop_usd: 25.00
+  profit_target_pct: 0.40
+  min_edge_threshold: 0.02
+  min_hold_hours: 2
+  min_hours_to_resolve: 1          # Dale 2026-04-10: only short-horizon positions to keep the
+  max_hours_to_resolve: 48         # wheels spinning. 1-48h window enforced in strategy-context.
+  tiered_stops:
+    - max_entry: 1.00
+      min_entry: 0.50
+      stop_pct: 0.30
+    - max_entry: 0.50
+      min_entry: 0.20
+      stop_pct: 0.50
+    - max_entry: 0.20
+      min_entry: 0.10
+      stop_pct: 0.60
+    - max_entry: 0.10
+      min_entry: 0.00
+      stop_pct: null
+
+execution:
+  slippage_bps: 50
+  bid_premium_pct: 0.02
+  max_retries: 3
+  retry_delay_ms: 2000
+  paper_fill_delay_ms: 200         # Faster paper fills for R&D
+
+api:
+  clob_base_url: https://clob.polymarket.com
+  data_api_base_url: https://data-api.polymarket.com
+  ws_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+  rate_limit_per_second: 10
+  # 2026-04-16 CTF Exchange V2 scaffolding — see default.yaml for the full
+  # comment + migration plan at docs/ctf-exchange-v2-migration-plan-2026-04-16.md
+  exchange_version: v1
+
+dashboard:
+  port: 9200
+  auth_enabled: true
+
+database:
+  path: /opt/polybot-v3-rd/data/rd.db
+
+# Attention Router (same defaults as prod, see config/default.yaml). R&D
+# already scans every 2 min so this is slightly less impactful but still
+# useful when scouts flag a fast-moving market mid-cycle.
+priority_scanner:
+  enabled: true
+  interval_ms: 30000
+  max_priorities_per_run: 25
+  min_scan_gap_ms: 60000
+  gc_every_n_runs: 60
+
+# Scout fleet — same defaults as prod.
+scouts:
+  enabled: true
+  interval_ms: 60000
+  # 2026-04-16: llm-news-scout PARKED. Diagnosed 2026-04-15/16 with commits
+  # 550d6ad (coordinator observability) + 4be9bc1 (log-level bumps on the
+  # zero-findings path). Findings:
+  #   - API is reachable, Haiku is responding in ~3s with valid JSON.
+  #   - Every call returns {"findings": []}. Correct behavior given the
+  #     prompt ("only flag if there is a SPECIFIC, RECENT, NAMEABLE
+  #     catalyst in the last 2 hours") combined with the fact that we
+  #     feed the scout no news — just question text + category tag. It
+  #     has no way to KNOW about recent catalysts without inputs.
+  #   - Prompt caching is broken too: cache_read=0, cache_creation=0 on
+  #     every call. 1942 input_tokens is under Haiku's 2048-token cache
+  #     minimum, so the cache_control block silently no-ops.
+  # scout_intel has never held a row in the life of the engine. applyScoutOverlay
+  # has been returning NEUTRAL (1.0x) for all 8795 calls — strategies have been
+  # running unweighted. That's actually fine for clean P&L attribution; the
+  # kill verdict + rolling view + partnership commitments all worked without it.
+  # The overlay code is left in place (harmless NEUTRAL default) so we can
+  # re-enable when a real news feed is wired in. See docs/todo.md item for
+  # the wire-up plan (NewsAPI / Perplexity / web search scout).
+  disabled_scouts:
+    - llm-news-scout
