@@ -7,7 +7,7 @@
 
 **Shipped today (single commit):**
 
-1. **CTF Exchange V2 migration** (04-19 Action 1, Tuesday deadline) — `@polymarket/clob-client-v2@1.0.0` installed side-by-side with v1. `ClobClientWrapper` branches on `api.exchange_version` config flag. R&D boot-test with `exchange_version: v2` succeeded. Flipped back to v1 until cutover day 2026-04-22. Cutover action: edit one line in both yamls, restart engines.
+1. **CTF Exchange V2 migration** (04-19 Action 1, Tuesday deadline) — `@polymarket/clob-client-v2@1.0.0` installed side-by-side with v1. `ClobClientWrapper` branches on `api.exchange_version` config flag. R&D boot-test with `exchange_version: v2` succeeded. Flipped back to v1 until cutover day 2026-04-28 ~11:00 UTC. Cutover action: edit one line in both yamls, restart engines.
 2. **G8 NULL-strategy guard** — `assertStrategyAttribution()` in `src/storage/repositories/position-repo.ts` throws on `upsertPosition`/`addFillToPosition` if `strategy_id` is null/empty. 8 historical orphans (IDs 117-125, opened 2026-04-10) backfilled to `pre_guard_legacy` on prod DB.
 3. **Favorites/compounding 2x allocation** (04-19 Action 5) — only strategy with positive PnL across both engines (+$3.57 prod, +$135 R&D). `compoundingMultiplier = 2.0` in favorites.ts buildSignal. Other favorites subs unchanged. Risk-engine caps still bind.
 4. **Kelly-drawdown co-optimization** (04-17 report, Crane substack) — `effectiveKelly = min(fractional_kelly, daily_lockout / (4 * stop_pct * equity))`. Caps sizing to respect the daily loss budget. Live in `position-sizer.ts`.

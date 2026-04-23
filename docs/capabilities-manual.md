@@ -138,7 +138,7 @@ Narrow applicability (only trigger on specific event-market categories), low pri
   - post-04-17 R&D n ≥ 20 AND avg PnL still ≤ pre-fix → RETIRE
 - As of 2026-04-20: n=102, WR 95.1%, avg +$0.15/trade (vs pre-fix avg -$0.24/trade) → **VALIDATED, KEEP**
 
-**2026-04-22 (Wednesday): CTF Exchange V2 cutover**
+**2026-04-28 (Tuesday) ~11:00 UTC: CTF Exchange V2 cutover [slipped from 04-22 per @PolymarketDevs 04-18]**
 - Polymarket migrates to CTF Exchange V2 + pUSD collateral token
 - V1 orders cancelled at cutover
 - Cutover action: flip `exchange_version: v2` in both yamls, restart engines
