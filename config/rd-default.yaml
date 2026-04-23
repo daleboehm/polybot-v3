@@ -7,7 +7,7 @@ engine:
   # engines. R&D paper-sim uses book data for maker fill gating, and the
   # fast evaluator gives R&D the same 10-second BTC reaction as prod.
   orderbook_subscribe: true
-  max_concurrent_orders: 20        # Higher for R&D — paper trades are cheap
+  max_concurrent_orders: 50        # 2026-04-23 Phase 1: raised from 20 to parallelize signal throughput
   log_level: info
 
 risk:
@@ -16,7 +16,7 @@ risk:
   # max_position_usd. When reserves come back, it'll be via the central-node
   # sweep pattern, not these knobs.
   max_position_pct: 0.05           # 5% per position — still enforced as a Kelly hard ceiling
-  max_position_usd: 20.00              # 2026-04-23: raised from 10 to let Kelly bite on survivors (news_overreaction quarter-Kelly=0.11, compounding=0.07)
+  max_position_usd: 75.00              # 2026-04-23 Phase 1 of $100/day plan: 3.75× sizing. Paper, no capital risk. Kelly permits up to 10.9% of $10K book = $1090 on best sub; $75 is conservative vs liquidity
                                    # slots, enough room for every sub-strategy to accumulate data
                                    # before cash binds.
   # 2026-04-17: R&D has no portfolio cap — purpose is data collection, not capital
@@ -32,7 +32,7 @@ risk:
   # High threshold was starving all strategies of data.
   min_edge_threshold: 0.005
   min_hold_hours: 2
-  min_hours_to_resolve: 1          # Dale 2026-04-10: only short-horizon positions to keep the
+  min_hours_to_resolve: 0.25       # 2026-04-23 Phase 1: lowered from 1h to unlock 15-min crypto/RTDS markets for scalping (Dale 2026-04-10: only short-horizon positions to keep the
   max_hours_to_resolve: 48         # wheels spinning. 1-48h window enforced in strategy-context.
   tiered_stops:
     - max_entry: 1.00
