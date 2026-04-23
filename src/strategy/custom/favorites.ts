@@ -39,7 +39,7 @@ export class FavoritesStrategy extends BaseStrategy {
     const markets = ctx.getActiveMarkets();
     const now = Date.now();
     const existingPositions = new Set(
-      ctx.getOpenPositions(ctx.entity.config.slug).map(p => p.condition_id)
+      ctx.getOpenPositionsAcrossFleet().map(p => p.condition_id)
     );
 
     // 2026-04-20 Action 6: lifecycle timing filter (opt-in via env).

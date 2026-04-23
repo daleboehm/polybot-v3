@@ -65,7 +65,7 @@ export class LongshotStrategy extends BaseStrategy {
     // would overwrite the original strategy_id/sub_strategy_id. favorites.ts
     // and convergence.ts already have this check; longshot was the odd one out.
     const existingPositions = new Set(
-      ctx.getOpenPositions(ctx.entity.config.slug).map(p => p.condition_id),
+      ctx.getOpenPositionsAcrossFleet().map(p => p.condition_id),
     );
 
     // Per-market precedence set — audit A-P1-10 fix (2026-04-10). Prevents the
