@@ -30,6 +30,7 @@ import { CrossMarketArbScout } from './cross-market-arb-scout.js';
 import { CompleteSetArbScout } from './complete-set-arb-scout.js';
 import { PositionIntelScout } from './position-intel-scout.js';
 import { DuneWhaleScout } from './dune-whale-scout.js';
+import { SubgraphWhaleScout } from './subgraph-whale-scout.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('scout-coordinator');
@@ -83,6 +84,7 @@ export class ScoutCoordinator {
       new CompleteSetArbScout(),
       new PositionIntelScout(),
       new DuneWhaleScout(),
+      new SubgraphWhaleScout(),
     ];
     this.scouts = all.filter(s => !this.config.disabled_scouts.includes(s.id));
     log.info(
