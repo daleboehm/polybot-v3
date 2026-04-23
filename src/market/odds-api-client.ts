@@ -73,7 +73,7 @@ export const TRACKED_SPORTS = [
 
 export type SportKey = typeof TRACKED_SPORTS[number];
 
-const BASE_URL = 'https://api.the-odds-api.com/v4';
+const BASE_URL = 'https://parlay-api.com/v1';
 const REGION = 'us';
 const MARKETS = 'h2h'; // head-to-head (moneyline) only
 const ODDS_FORMAT = 'decimal';
