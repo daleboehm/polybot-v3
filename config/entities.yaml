@@ -52,27 +52,26 @@ entities:
     # 2026-04-16 Fix 4: weather_forecast is the #1 P&L contributor
     # (+$316 all-time, +$180 on 2026-04-16). Keep enabled. Capital
     # doubling is handled via strategy-weighter config (not here).
+    # 2026-04-23 PIVOT: Prod mirrors R&D kill-list + adds missing winners.
+    # All sub-strategies gated via polybot-pnl-triage quarter-Kelly verdict over 14d.
     strategies:
-      - weather_forecast
+      # Survivors (positive quarter-Kelly, n>=50 on R&D):
+      - { strategy_id: favorites,          sub_strategy_ids: [compounding, near_snipe] }  # fan_fade KILLED (-$52 / 22% WR on R&D)
+      - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }  # RE-ENABLED with safe subs; systematic_fade stays killed (-$22 / 32% WR)
+      - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # single_forecast KILLED (-$18 PnL despite 76.5% WR — payout asymmetry 4:1)
+      - { strategy_id: negrisk_arbitrage,  sub_strategy_ids: [buy_the_set] }  # ADDED (missing from Prod): 96% WR, f_q=0.16, tail-risk capped by max_position_usd
+      # Kept as whole strategies (no sub-strategy triage yet):
       - crypto_price
-      - strategy_id: favorites
-        sub_strategy_ids:
-          - compounding
-          - near_snipe
-          - fan_fade
-      # - longshot            # DISABLED 2026-04-16 G3 — see comment above
-      # - convergence         # DISABLED 2026-04-16 Fix 2 — see comment above
-      # 2026-04-12: sportsbook_fade DISABLED after 24h review.
-      # 14 resolutions, 0 wins, 1 loss, -$1.05. The Odds API feed
-      # is not producing edge on sports markets. Re-enable after
-      # investigation of the sportsbook-fade probability model.
-      # - sportsbook_fade
       - cross_market
       - macro_forecast
-      # Phase C2 (2026-04-12): whale_copy strategy ACTIVE. Requires
-      # WHALE_COPY_ENABLED=true in .env + at least one whitelisted whale.
-      # Dale: "Why would we not have whale tracking enabled?"
       - whale_copy
+      # STILL DISABLED:
+      # - convergence (long_term_grind: -$17 / 44% WR on R&D)
+      # - sportsbook_fade (all subs: negative edge, Odds API not producing sports edge)
+      # - favorites/stratified_bias (killed 04-23: -$16 / 43% WR)
+      # - favorites/fan_fade (killed 04-23: -$52 / 22% WR)
+      # - longshot/systematic_fade (killed 04-23: -$22 / 32% WR)
+      # - weather_forecast/single_forecast (killed 04-23: payout asymmetry 4:1)
 
   - slug: armorstack
     name: "GC Armorstack"
