@@ -1,5 +1,85 @@
 # Polybot V3 — Architecture Context
 
+**Updated: 2026-04-23 11:55 CDT** (new data feeds, new skills, kill-list discipline, autonomous monitoring)
+
+## 2026-04-23 capability state — read this before any Polybot session
+
+### Engines (both running latest commit 69442a4)
+
+- **Prod** (`polybot-v3`): live mode, $373.62 balance, HALTED via `kill_switch_state` (operator_sigusr1 since 2026-04-15). max_position_usd=$25, daily_loss_lockout=$10, fractional_kelly=0.20, exchange_version=v1.
+- **R&D** (`polybot-v3-rd`): paper mode, $10,000 equity (recapitalized 2026-04-23), 114 clean-book positions. max_position_usd=$75, fractional_kelly=0.25, exchange_version=v2 (V2 shakedown in progress).
+
+### Active sub-strategies (post 2026-04-23 kill-list)
+
+**Survivors** (both engines, with Kelly-positive edge at n≥50):
+- `favorites/compounding` (f_q=0.073)
+- `longshot/news_overreaction_fade` (f_q=0.109 — best Sharpe)
+- `longshot/bucketed_fade` (f_q=0.070)
+- `negrisk_arbitrage/buy_the_set` (f_q=0.164, tail-risk-capped)
+- `weather_forecast/{ensemble_spread_fade, next_day_horizon}` (small-n positive)
+- `crypto_price/*` — latency_arb, target_proximity, volatility_premium_fade, ta_momentum (Chainlink-arb focus)
+- `rtds_forecast/{equity, commodity}` — high-velocity workhorse, 10× sizing active
+- `maker_rebate` — sports/esports post-only maker flow
+- `cross_market`, `macro_forecast`, `whale_copy`
+
+**Killed** (do not re-enable without new evidence):
+- favorites/fan_fade, favorites/stratified_bias
+- longshot/systematic_fade
+- weather_forecast/single_forecast (payout asymmetry 4:1)
+- convergence (entire)
+- sportsbook_fade (entire)
+
+### Data feeds (stack as of 2026-04-23)
+
+- **Binance WS** + **Coinbase** + **Chainlink proxy** — exchange-divergence-scout (threshold 0.5% for Chainlink-latency arb)
+- **Pyth Hermes** — secondary oracle (9 feeds: BTC/ETH/SOL/XRP/XAU/XAG/EUR/GBP/SPY)
+- **Polymarket RTDS WebSocket** — 28 symbols streaming (commodity/FX/equity)
+- **Open-Meteo ECMWF AIFS ensemble** — weather (20% more accurate than IFS)
+- **NOAA HRRR** — short-range weather blend for <48h
+- **Meteostat / Open-Meteo archive** — historical weather (backtest ground truth)
+- **FRED API** — macro (CPI, unemployment, yield curves)
+- **Parlay API** (parlay-api.com/v1) — sports odds, drop-in Odds-API replacement
+- **Goldsky Polymarket subgraph** — pnl/positions/activity/orderbook (via GOLDSKY_TOKEN)
+- **Dune Analytics** — whale PnL/volume community dashboards
+- **Polymarket Gamma /markets/keyset** — migrated from deprecated /markets (May 1 deadline)
+- **Polymarket CLOB** — primary execution venue (v1 now, v2 on 2026-04-28)
+- **Polymarket Data API** — whale position-state polling (position-intel-scout)
+
+### Scouts (12 active on R&D, 11 on Prod)
+
+volume-spike, price-jump, new-listing, llm-news, leaderboard-poller, exchange-divergence, kl-divergence, cross-market-arb, complete-set-arb, position-intel, dune-whale, subgraph-whale (+11 from prod)
+
+### Skills loaded for Polybot sessions
+
+Mandatory first reads (enforced by PreToolUse hook on polybot-v3/Polymarket edits):
+- `polybot-pnl-triage` — canonical leaderboard, Kelly verdict, decision tree
+- `polybot-unhalt-gate` — 5 quantitative gates before Prod unhalt
+- `polymarket-official-agent` — CLOB v1/v2 signing, EIP-712 schemas, neg-risk accounting
+- `polymarket-markov-empirical-edges` — Becker 72.1M-trade study (longshot bias, optimism tax)
+- `polymarket-x-watcher` — curated 25-account tier list + 4-point vetting gate
+- `agi-kelly-criterion` — sizing math (fractional Kelly 0.25×)
+- `agi-portfolio-analytics` — Sharpe/Sortino/drawdown
+- `agi-walk-forward-validation` — purged-CPCV for edge verification
+- `agi-regime-detection` — route strategies by vol/trend regime
+- `polymarket-ecmwf-aifs-ensemble` — weather forecast model (already live)
+- `polymarket-directional-inversion-audit` — bug-class audit (clean 04-12)
+
+### Autonomous monitoring
+
+- **Claude-side 4h cron** (job 3b142219, session-only): top of every 4h CDT — adaptive triage, kill/scale, reports delta to user
+- **VPS-side hourly systemd timer** (`polybot-safety-net.timer` + `/root/polybot-safety-net.sh`): mechanical guardrails independent of Claude — catastrophic loser flagging, drawdown alarm, trade-velocity alarm, engine-alive check + auto-restart
+
+### Mission clock
+
+- **2026-04-23 11:55 CDT (now)**: clean-book measurement window open
+- **2026-04-24 12:00 PM CDT**: Prod unhalt-gate decision
+- **2026-04-26 8:00 PM CDT**: $100/day verdict
+- **2026-04-28 6:00 AM CDT**: V2 cutover + Prod V2 unhalt gate
+
+---
+
+# Polybot V3 — Architecture Context
+
 **Updated: 2026-04-17** (CTF V2 blocker; R&D fixed 2026-04-17; GitHub-only deploy; tweet vetting gate)
 
 ## Quick resume for any Claude session

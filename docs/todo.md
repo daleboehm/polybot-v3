@@ -1,5 +1,51 @@
 # Polybot V3 — TODO
 
+**Updated: 2026-04-23 11:55 CDT** — Mission pivot: R&D paper money-maker. Target $100/day by Sunday EOD. Prod remains halted pending Friday gate.
+
+## Active clock
+
+| Time (Chicago CDT) | Event |
+|---|---|
+| 12:00 PM Thu 04-23 | Autonomous cron fire #1 — first measurement post clean-book + RTDS 10× + Chainlink 0.5% |
+| 4:00 PM Thu 04-23 | Cron fire #2 |
+| 8:00 PM Thu 04-23 | Cron fire #3 — evening check |
+| 12:00 AM–8:00 AM Fri 04-24 | Overnight cycles |
+| **12:00 PM Fri 04-24** | **Prod unhalt-gate decision** — if 24h clean PnL ≥ $50, SIGUSR2 release Prod through weekend |
+| Fri afternoon–Sun 6:00 PM | Weekend monitoring + tuning every 4h |
+| **5:00 PM Sun 04-26** | **Halt Prod** pre-V2-cutover (SIGUSR1) |
+| **8:00 PM Sun 04-26** | **$100/day final verdict** |
+| **6:00 AM Tue 04-28** | **V2 cutover** (Polymarket official) — flip exchange_version on Prod, restart, run all 5 unhalt gates, SIGUSR2 if pass |
+
+## Immediate pending items
+
+1. **Watch autonomous cron output at 12:00 PM CDT** — if 4h PnL is positive with new controls, projection to $100/day is credible; if flat/negative, investigate.
+2. **Friday 12:00 PM CDT unhalt-gate evaluation** — run all 5 gates in writing (see `~/.claude/skills/polybot-unhalt-gate`). All must pass: 5d PnL > +$50, 2+ strategies with Sharpe >0.5, zero negative-Kelly subs enabled, max 14d drawdown <15%, Gate-5 caps verified.
+3. **Sunday 5:00 PM CDT halt Prod** — `systemctl kill -s SIGUSR1 polybot-v3` before V2 cutover Tuesday morning.
+4. **Tuesday 6:00 AM CDT V2 cutover on Prod** — edit `config/default.yaml` `exchange_version: v1 → v2`, restart, run gates, SIGUSR2 if pass.
+
+## Parked / deferred
+
+- **Kalshi 15-min scalping strategy** — research for post-Sunday. Polymarket doesn't offer true 15-min crypto markets in volume; Kalshi does.
+- **OpenBB integration** — evaluate as data-source consolidation layer after V2 stable (item 10 from @crptAtlas infographic).
+- **Crucix on-chain whale front-running** — similar to our Goldsky subgraph but different angle; evaluate post-Sunday.
+- **Polymarket-Trading-Bot GitHub repo** — 53k LOC TS repo claimed to have 7 strategies; couldn't locate in public repos, may be proprietary.
+
+## Recently shipped today (2026-04-23)
+
+- `a16c4fe` — Phase 1 of $100/day plan (max_position $10→$75, max_concurrent 20→50, min_hours_to_resolve 1→0.25)
+- `2f83990` — Phase 2+3 (crypto_price tuning, complete-set-arb 0.965→0.975, negrisk window 0.85-0.97 → 0.82-0.98)
+- `fe7fc7d` — R&D kill-list + sub_strategy_ids allow-lists for survivors only
+- `9d8ad5b` — Prod mirrors R&D kill-list + adds missing negrisk_arbitrage/buy_the_set + tightens Gate-5 caps
+- `bc0eba7` — V2 cutover date update to 2026-04-28 11:00 UTC
+- `b271e8f` — Gamma /markets/keyset migration
+- `69442a4` — Chainlink-latency arb unclog (threshold 3% → 0.5%) + RTDS position cap $5 → $50
+
+Plus: R&D force-close of 246 killed-strategy positions (-$55 realized, clean book), cash topped up to $10K equity (,169 added), VPS safety-net systemd timer installed, Claude-side 4h autonomous cron active (job 3b142219).
+
+---
+
+# Polybot V3 — TODO
+
 **Updated: 2026-04-15** (PROD and R&D both running the same G1+G2+G3+G4b+`v_strategy_rolling` binary as of 18:32 UTC. Prod is halted via persisted `kill_switch_state` row, waiting on operator G4a backlog sweep + G5 cap right-sizing + G6 SIGUSR2 release. Prod-exit-hatch `sell-position --all-open` landed commit `3bc2de3`, dry-run verified against the 7 open prod positions. G2 knob made explicit in prod yaml via commit `02dc5db`. Rolling-window observability (`v_strategy_rolling` view + `/api/strategies/rolling` endpoint + entity dashboard section) landed commits `41a0978` + `8ef142f` after the longshot 0.83-dead-zone kill verdict — the decision surface now shows per-trade P&L over 24h/48h/72h/all-time per (strategy, sub), so future sessions can't fall back into the all-time-average trap.)
 
 

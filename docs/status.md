@@ -1,3 +1,62 @@
+# Polybot V3 — Live Status
+
+**Updated: 2026-04-23 11:55 CDT** (R&D paper money-maker pivot shipped; Prod restarted on latest code; 4h autonomous Claude cron + hourly VPS safety-net timer live)
+
+## TL;DR for a fresh Claude session
+
+**PROD remains halted.** kill_switch_state persisted since 2026-04-15 18:09 UTC, re-halted on every restart, only SIGUSR2 or dashboard resume releases. Prod is running commit 69442a4 on $373.62 with the full kill-list + tightened Gate-5 caps applied — config-ready for weekend unhalt if Friday 12:00 PM CDT gate passes.
+
+**R&D paper money-maker pivot live.** Recapitalized to $10,000 equity, clean book (114 survivors only), and these live controls:
+- max_position_usd $10 → $75
+- max_concurrent_orders 20 → 50
+- min_hours_to_resolve 1h → 0.25h (unlocks 15-min+ crypto)
+- exchange-divergence threshold 3% → 0.5% (catch Chainlink-latency arb per @usePolyArb 2026-04-23)
+- RTDS per-strategy cap $5 → $50 (10× sizing on highest-velocity winner)
+
+**Kill list applied to BOTH engines (no new entries in these subs):**
+- favorites/fan_fade (22% WR, -$52)
+- favorites/stratified_bias (43% WR, -$16)
+- longshot/systematic_fade (32% WR, -$22)
+- weather_forecast/single_forecast (76.5% WR but payout asymmetry 4:1, -$18)
+- convergence/long_term_grind (44% WR, -$17, entire strategy)
+- sportsbook_fade/single_forecast (44% WR, -$1, entire strategy)
+
+**Survivors running at Kelly-sized caps:**
+- favorites/compounding (65% WR, f_q=0.073)
+- longshot/news_overreaction_fade (74% WR, f_q=0.109, best Sharpe)
+- longshot/bucketed_fade (66% WR, f_q=0.070)
+- negrisk_arbitrage/buy_the_set (96% WR, f_q=0.164, ADDED to Prod)
+
+**Gate-5 caps on Prod (tightened 2026-04-23):**
+- max_position_usd: $25 (unchanged, right-sized for $374)
+- daily_loss_lockout_usd: $15 → $10 (2.7% daily floor on $374)
+- fractional_kelly: 0.25 → 0.20 (extra margin vs estimation error)
+
+**V2 cutover slipped to 2026-04-28 06:00 CDT** (11:00 UTC) per @PolymarketDevs 2026-04-18. R&D already on `exchange_version: v2`. Prod on v1 until cutover morning.
+
+**Gamma API migration done (2026-04-23):** /markets → /markets/keyset on both callers (long-tail-backfill, uma-dispute-watcher). May 1 deprecation deadline met with 8 days to spare.
+
+**Autonomous monitoring now live:**
+- Claude-side 4h triage cron (top of hour, Chicago CDT) — adaptive tuning + kill/scale decisions
+- VPS-side hourly systemd timer (`/root/polybot-safety-net.sh`) — mechanical guardrails independent of Claude
+
+**New skills installed locally (2026-04-23):**
+- `~/.claude/skills/polybot-pnl-triage` — canonical leaderboard + Kelly verdict
+- `~/.claude/skills/polybot-unhalt-gate` — 5 quantitative gates before any Prod unhalt
+- `~/.claude/skills/polymarket-x-watcher` — curated 25-account tier list + 4-point vetting gate
+- PreToolUse hook on `polybot-v3/src/|config/` edits — auto-reminds to load the relevant skill
+
+**New data feeds shipped (2026-04-23 morning):**
+- Pyth Hermes oracle (secondary crypto/commodity/FX/equity source)
+- Meteostat historical weather (free, no-key via Open-Meteo archive)
+- Goldsky Polymarket subgraph client (pnl/positions/activity/orderbook)
+- Dune Analytics client + whale PnL overlay scout
+- Polymarket Gamma /markets/keyset migration
+
+**Mission: R&D makes $100/day by Sunday 2026-04-26 8:00 PM CDT, verdict**. Current clean-book 24h run-rate is still draining force-close haircut (-$55 posted 2026-04-23 10:58 CDT). New-controls measurement window begins with autonomous cron fires starting 12:00 PM CDT.
+
+---
+
 # Polybot V3 --- Live Status
 
 **Updated: 2026-04-17** (R&D back online after 2-day outage; CTF V2 hard blocker confirmed; GitHub-only deploy)
