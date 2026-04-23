@@ -3,7 +3,7 @@
 import type { StrategyContext } from './strategy-interface.js';
 import type { Signal, MarketData, EntityState, RiskLimits, Position } from '../types/index.js';
 import type { MarketCache } from '../market/market-cache.js';
-import { getOpenPositions as getOpenPositionsRepo } from '../storage/repositories/position-repo.js';
+import { getOpenPositions as getOpenPositionsRepo, getAllOpenPositions as getAllOpenPositionsRepo, type PositionRow } from '../storage/repositories/position-repo.js';
 import { getSignalsByStrategy } from '../storage/repositories/signal-repo.js';
 
 export function createStrategyContext(
@@ -57,7 +57,32 @@ export function createStrategyContext(
 
     getOpenPositions(entitySlug: string): Position[] {
       const rows = getOpenPositionsRepo(entitySlug);
-      return rows.map(r => ({
+      return rows.map((r: PositionRow) => ({
+        entity_slug: r.entity_slug,
+        condition_id: r.condition_id,
+        token_id: r.token_id,
+        side: r.side as 'YES' | 'NO',
+        size: r.size,
+        avg_entry_price: r.avg_entry_price,
+        cost_basis: r.cost_basis,
+        current_price: r.current_price,
+        unrealized_pnl: r.unrealized_pnl,
+        market_question: r.market_question ?? '',
+        strategy_id: r.strategy_id ?? '',
+        is_paper: r.is_paper === 1,
+        status: r.status as 'open' | 'closed' | 'resolved',
+        opened_at: new Date(r.opened_at),
+        closed_at: r.closed_at ? new Date(r.closed_at) : undefined,
+      }));
+    },
+
+    getOpenPositionsAcrossFleet(): Position[] {
+      // Fleet-aware dedup. When FLEET_ACTIVE=false returns only this entity's
+      // open positions; when true returns ALL entities' — so sister wallets in
+      // the fleet don't double up on the same condition_id.
+      const fleetActive = (process.env.FLEET_ACTIVE ?? 'false').toLowerCase() === 'true';
+      const rows = fleetActive ? getAllOpenPositionsRepo() : getOpenPositionsRepo(entity.config.slug);
+      return rows.map((r: PositionRow) => ({
         entity_slug: r.entity_slug,
         condition_id: r.condition_id,
         token_id: r.token_id,

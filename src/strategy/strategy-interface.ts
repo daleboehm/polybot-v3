@@ -26,6 +26,13 @@ export interface StrategyContext {
    */
   getActiveMarketsInWindow(minHours: number, maxHours: number): MarketData[];
   getOpenPositions(entitySlug: string): Position[];
+  /**
+   * Fleet-aware dedup helper — returns open positions across ALL entities.
+   * Use when FLEET_ACTIVE=true to prevent sister wallets from piling into
+   * the same condition_id. Returns the same row shape as getOpenPositions().
+   * When FLEET_ACTIVE=false, returns the same as getOpenPositions(ctx.entity.config.slug).
+   */
+  getOpenPositionsAcrossFleet(): Position[];
   getRecentSignals(strategyId: string, limit: number): Signal[];
 }
 

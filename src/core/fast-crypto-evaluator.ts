@@ -244,6 +244,18 @@ export class FastCryptoEvaluator {
           closed_at: r.closed_at ? new Date(r.closed_at) : undefined,
         }));
       },
+      getOpenPositionsAcrossFleet(): Position[] {
+        // Single-entity context — fleet dedup handled by main engine-tick path.
+        return getOpenPositionsRepo(entity.config.slug).map(r => ({
+          entity_slug: r.entity_slug, condition_id: r.condition_id, token_id: r.token_id,
+          side: r.side as 'YES' | 'NO', size: r.size, avg_entry_price: r.avg_entry_price,
+          cost_basis: r.cost_basis, current_price: r.current_price, unrealized_pnl: r.unrealized_pnl,
+          market_question: r.market_question ?? '', strategy_id: r.strategy_id ?? '',
+          is_paper: r.is_paper === 1, status: r.status as 'open' | 'closed' | 'resolved',
+          opened_at: new Date(r.opened_at), closed_at: r.closed_at ? new Date(r.closed_at) : undefined,
+        }));
+      },
+
       getRecentSignals(strategyId: string, limit: number): Signal[] {
         const rows = getSignalsByStrategy(strategyId, limit);
         return rows.map(r => ({
