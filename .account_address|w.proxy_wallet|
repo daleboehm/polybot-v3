@@ -1,1 +1,0 @@
-      const wallets = whales.map(w => || w.account_address).filter(Boolean) as string[];
