@@ -29,6 +29,7 @@ import { KLDivergenceScout } from './kl-divergence-scout.js';
 import { CrossMarketArbScout } from './cross-market-arb-scout.js';
 import { CompleteSetArbScout } from './complete-set-arb-scout.js';
 import { PositionIntelScout } from './position-intel-scout.js';
+import { DuneWhaleScout } from './dune-whale-scout.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('scout-coordinator');
@@ -81,6 +82,7 @@ export class ScoutCoordinator {
       new CrossMarketArbScout(),
       new CompleteSetArbScout(),
       new PositionIntelScout(),
+      new DuneWhaleScout(),
     ];
     this.scouts = all.filter(s => !this.config.disabled_scouts.includes(s.id));
     log.info(
