@@ -20,23 +20,28 @@ entities:
     status: active
     starting_capital: 10000
     strategies:
-      - weather_forecast
+      # 2026-04-23 PIVOT: R&D becomes a paper MONEY MAKER. Kill-list applied via
+      # Kelly-sized triage on 14-day leaderboard (see ~/.claude/skills/polybot-pnl-triage).
+      # Survivors (positive quarter-Kelly at 14d, n>=50):
+      - { strategy_id: favorites,          sub_strategy_ids: [compounding] }           # 64.9% WR, +$102 / 990
+      - { strategy_id: longshot,           sub_strategy_ids: [bucketed_fade, news_overreaction_fade] }   # 65.9%/74.4% WR, +$32 / +$89
+      - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # small n winners; killed single_forecast (asymmetric payout)
+      - negrisk_arbitrage                                                              # 96% WR, +$18 / 175 (tail-risk capped by max_position_usd)
+      # Tiny-n strategies kept for data collection (insufficient sample, do not kill):
       - crypto_price
       - whale_fade
       - rtds_forecast
       - maker_rebate
-      - favorites
-      - longshot
-      - convergence
-      - sportsbook_fade
       - cross_market
       - macro_forecast
       - whale_copy
-      # 2026-04-16 Fix 3: NegRisk combinatorial arbitrage scanner. Starts live
-      # on R&D (paper only) so we can measure realized P&L across many
-      # families before risking prod capital. Families pass the arb filter when
-      # 3-25 members and Σ(YES) ∈ [0.85, 0.97]. Per-leg size $4.
-      - negrisk_arbitrage
+      # KILLED 2026-04-23 (negative quarter-Kelly at 14d):
+      #   convergence/long_term_grind (-$17, 44% WR)
+      #   sportsbook_fade/single_forecast (-$1, 44% WR)
+      #   favorites/fan_fade (-$52, 22% WR)
+      #   favorites/stratified_bias (-$16, 43% WR)
+      #   longshot/systematic_fade (-$22, 32% WR)
+      #   weather_forecast/single_forecast (-$18, 76.5% WR but avg_loss 4× avg_win = payout asymmetry)
       # value/skew/complement quarantined R2 PR#1 (2026-04-10) — see strategy/archive/
       # whale_copy re-added 2026-04-16 during config-sync cleanup: it was only
       # present in /opt/polybot-v3-rd/config/ (manually edited post-rebuild, never

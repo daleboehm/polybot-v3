@@ -16,7 +16,7 @@ risk:
   # max_position_usd. When reserves come back, it'll be via the central-node
   # sweep pattern, not these knobs.
   max_position_pct: 0.05           # 5% per position — still enforced as a Kelly hard ceiling
-  max_position_usd: 10.00          # Smaller paper positions for broader coverage. $10K / $10 = 1000
+  max_position_usd: 20.00              # 2026-04-23: raised from 10 to let Kelly bite on survivors (news_overreaction quarter-Kelly=0.11, compounding=0.07)
                                    # slots, enough room for every sub-strategy to accumulate data
                                    # before cash binds.
   # 2026-04-17: R&D has no portfolio cap — purpose is data collection, not capital
