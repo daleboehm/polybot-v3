@@ -58,8 +58,8 @@ const log = createChildLogger('strategy:negrisk-arb');
 // Thresholds
 const MIN_FAMILY_MEMBERS = 3;
 const MAX_FAMILY_MEMBERS = 25;
-const MIN_SUM_YES = 0.85;
-const MAX_SUM_YES = 0.97;
+const MIN_SUM_YES = 0.82;  // 2026-04-23 Phase 3: 0.85→0.82 (more families qualify)
+const MAX_SUM_YES = 0.98;  // 2026-04-23 Phase 3: 0.97→0.98 (thinner-margin but still profitable arbs included)
 const DEFAULT_LEG_SIZE_USD = 4;
 // 2026-04-20: cap per-leg price to avoid partial-basket bleed. R&D data
 // (n=184, 19% WR, -$64 total) showed a clear split: tail legs < $0.10

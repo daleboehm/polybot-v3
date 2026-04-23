@@ -38,7 +38,7 @@ const log = createChildLogger('scout:complete-set-arb');
 
 // Sum threshold. Need sum < this to flag. 0.965 leaves ~3.5% margin
 // after worst-case round-trip fees + slippage.
-const SUM_THRESHOLD = 0.965;
+const SUM_THRESHOLD = 0.975;  // 2026-04-23 Phase 3: 0.965→0.975 broadens arb window (still clears 2% round-trip fees)
 
 // Floor on individual side price — reject dust/stale orderbook reads.
 const MIN_SIDE_PRICE = 0.02;

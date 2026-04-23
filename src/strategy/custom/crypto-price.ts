@@ -32,15 +32,15 @@ interface PriceCache {
 }
 
 const CONFIG = {
-  min_edge: 0.05,
-  min_confidence: 0.40,
+  min_edge: 0.03,                 // 2026-04-23 Phase 2: 0.05→0.03 for scalping velocity
+  min_confidence: 0.30,            // 2026-04-23 Phase 2: 0.40→0.30
   max_hours_to_resolve: 48,
   // 2026-04-13: lowered from 1.0 to 0.05 (3 minutes) to capture 5-min
   // AND hourly BTC "Up or Down" markets. These use Chainlink auto-settlement
   // and are the fastest-resolving markets on Polymarket. The exchange
   // divergence scout + book quality check provide defensive gating.
   min_hours_to_resolve: 0.05,
-  dedup_minutes: 10, // lowered from 120 — fast markets need faster re-entry
+  dedup_minutes: 3,                // 2026-04-23 Phase 2: 10→3 for 15-min scalping
   price_cache_ttl_ms: 60 * 1000, // 1 min (was 5 — need fresher for short-duration)
 };
 
