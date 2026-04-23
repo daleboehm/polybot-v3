@@ -11,7 +11,7 @@
 //   2. Filters to the ones whose joined market row is missing end_date, has
 //      an end_date outside the sampling horizon, or doesn't exist at all
 //      (the sampling poller will never touch any of these)
-//   3. Queries Gamma /markets?condition_ids=X for each, extracts endDate (with
+//   3. Queries Gamma /markets/keyset?condition_ids=X for each, extracts endDate (with
 //      events[0].endDate fallback — long-dated political markets only carry
 //      the date on the event, not the market), closed/active flags,
 //      umaResolutionStatus, and clobTokenIds
@@ -239,7 +239,7 @@ async function fetchGammaMarketMetadata(
   conditionId: string,
   timeoutMs: number,
 ): Promise<GammaMetadata | null> {
-  const url = `${GAMMA_BASE}/markets?condition_ids=${encodeURIComponent(conditionId)}`;
+  const url = `${GAMMA_BASE}/markets/keyset?condition_ids=${encodeURIComponent(conditionId)}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(timeoutMs),
@@ -247,8 +247,9 @@ async function fetchGammaMarketMetadata(
   if (!res.ok) {
     throw new Error(`Gamma returned HTTP ${res.status}`);
   }
-  const body = (await res.json()) as GammaMarketRaw[];
-  if (!Array.isArray(body) || body.length === 0) return null;
+  const raw = (await res.json()) as { markets?: GammaMarketRaw[] };
+  const body = raw.markets ?? [];
+  if (body.length === 0) return null;
   const m = body[0];
 
   // Prefer market-level endDate, fall back to events[0].endDate. Long-dated

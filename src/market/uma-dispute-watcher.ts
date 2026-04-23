@@ -8,7 +8,7 @@
 // Mechanism:
 //   1. Walk every distinct condition_id across all open positions (both prod
 //      and R&D share this binary; each scoped by DB path).
-//   2. For each, query Gamma /markets?condition_ids=X.
+//   2. For each, query Gamma /markets/keyset?condition_ids=X.
 //   3. Parse umaResolutionStatus (and closed, for bonus dispute detection via
 //      "resolved but we didn't see it" case).
 //   4. UPDATE markets.uma_resolution_status via updateMarketMetadata.
@@ -200,7 +200,7 @@ async function fetchGammaUmaStatus(
   conditionId: string,
   timeoutMs: number,
 ): Promise<GammaUmaMetadata | null> {
-  const url = `${GAMMA_BASE}/markets?condition_ids=${encodeURIComponent(conditionId)}`;
+  const url = `${GAMMA_BASE}/markets/keyset?condition_ids=${encodeURIComponent(conditionId)}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(timeoutMs),
@@ -208,12 +208,13 @@ async function fetchGammaUmaStatus(
   if (!res.ok) {
     throw new Error(`Gamma returned HTTP ${res.status}`);
   }
-  const body = (await res.json()) as Array<{
+  const raw = (await res.json()) as { markets?: Array<{
     question?: string;
     umaResolutionStatus?: string | null;
     closed?: boolean;
-  }>;
-  if (!Array.isArray(body) || body.length === 0) return null;
+  }> };
+  const body = raw.markets ?? [];
+  if (body.length === 0) return null;
   const m = body[0];
   return {
     umaResolutionStatus: (m.umaResolutionStatus ?? '').trim(),
