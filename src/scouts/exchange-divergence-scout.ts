@@ -48,7 +48,7 @@ import { createChildLogger } from '../core/logger.js';
 // Configurable thresholds
 const MIN_EXCHANGE_DIVERGENCE_PCT = 0.001; // 0.1% between exchanges = data quality issue, skip
 const MAX_EXCHANGE_DIVERGENCE_PCT = 0.02;  // >2% between exchanges = one feed is stale, skip
-const MIN_MARKET_DIVERGENCE_PCT = 0.03;    // 3% divergence between exchange consensus and Polymarket implied prob
+const MIN_MARKET_DIVERGENCE_PCT = 0.005;   // 2026-04-23: lowered from 3% to 0.5% per @usePolyArb finding — BTC Up/Down Chainlink-latency edge compressed from 3%+ to <1% as bot competition increased. At 3% we were catching 0 divergences in 30m.
 const PRIORITY_LEVEL = 8;                   // High priority — exchange data is fresh signal
 const INTEL_CONVICTION = 0.70;              // Moderate-high — exchange prices are reliable but not infallible
 const INTEL_TTL_MS = 5 * 60 * 1000;        // 5 min — very short, signal decays fast

@@ -74,7 +74,7 @@ const CONFIG = {
   min_hours_to_resolve: 1,
   max_hours_to_resolve: 168, // 7 days — longer than weather/crypto because equity markets often resolve at month/quarter end
   dedup_minutes: 120,
-  max_position_usd: 5, // small-bet R&D observation
+  max_position_usd: 50, // 2026-04-23 raised 5->50 per $100/day plan: RTDS is highest-velocity winner (94+88 trades/30min). Kelly f_q calc TBD after 48h of $50-sized data.
 };
 
 interface Parsed {
