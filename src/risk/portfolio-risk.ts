@@ -54,7 +54,7 @@ export interface ExposureLimits {
 export const DEFAULT_EXPOSURE_LIMITS: ExposureLimits = {
   maxCategoryPct: 0.30,     // 30% per category (agi-risk-management)
   maxStrategyPct: 0.40,     // 40% per strategy
-  maxDrawdownPct: 0.20,     // -20% halt (moderate tier)
+  maxDrawdownPct: 0.50,     // 2026-04-23: raised 20->50% for RmaxDrawdownPct: 0.20,     // -20% halt (moderate tier)D. Prod still effectively capped by daily_loss_lockout_usd=$10 (2.7% daily) + max_portfolio_exposure_pct=0.15.
   maxConsecutiveLosses: 7,
 };
 
