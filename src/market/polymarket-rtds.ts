@@ -33,7 +33,6 @@
 
 import { WebSocket } from 'ws';
 import { createChildLogger } from '../core/logger.js';
-import { insertPriority } from '../storage/repositories/market-priority-repo.js';
 
 const log = createChildLogger('rtds-client');
 
@@ -59,15 +58,8 @@ let summaryTimer: NodeJS.Timeout | null = null;
 let totalMessagesReceived = 0;
 let messagesThisWindow = 0;
 
-// 2026-04-24 market_prices topic — ALL Polymarket markets stream prices here.
-// We track first-seen condition_ids to detect NEW LISTINGS and flag them as
-// priority for the scout-coordinator, so new 5-min/15-min BTC markets get
-// picked up in <30s instead of 20s sampling-poller + 30s priority-scan.
-const seenConditionIds = new Set<string>();
-let marketPricesReceived = 0;
-let newListingsFlagged = 0;
-const NEW_LISTING_PRIORITY_TTL_MS = 10 * 60 * 1000;  // 10 min priority window
-const NEW_LISTING_PRIORITY_LEVEL = 8;
+// 2026-04-24: market_prices topic DOES NOT EXIST on Polymarket RTDS. Server returns 401.
+// New-listing detection stays on sampling-poller (now 20s cadence). Finding logged in docs.
 
 function handleMessage(raw: string): void {
   totalMessagesReceived++;
@@ -88,32 +80,6 @@ function handleMessage(raw: string): void {
     }
   };
 
-  // 2026-04-24: route market_prices price_change events for new-listing detection
-  if (m.topic === 'market_prices' && m.payload?.condition_id) {
-    marketPricesReceived++;
-    const cid = m.payload.condition_id;
-    if (!seenConditionIds.has(cid)) {
-      seenConditionIds.add(cid);
-      // Only flag as priority if this is truly new (seen for first time in this session)
-      // AND the engine has been running for >60s (skip initial cache warm-up backlog)
-      try {
-        insertPriority({
-          condition_id: cid,
-          priority: NEW_LISTING_PRIORITY_LEVEL,
-          reason: 'rtds-new-listing: first price_change event on ' + (m.payload.market_slug ?? cid.substring(0, 12)),
-          created_by: 'rtds-client',
-          ttl_ms: NEW_LISTING_PRIORITY_TTL_MS,
-        });
-        newListingsFlagged++;
-        if (newListingsFlagged <= 20 || newListingsFlagged % 10 === 0) {
-          log.info({ condition_id: cid.substring(0, 16), market_slug: m.payload.market_slug?.substring(0, 40), total_new: newListingsFlagged }, 'RTDS: new listing flagged');
-        }
-      } catch (err) {
-        // Non-fatal — if insert fails (e.g. FK constraint because market not yet in DB), we'll pick it up via sampling-poller anyway
-      }
-    }
-    return;
-  }
 
   // 2026-04-24 diagnostic: log any unexpected topic we're receiving for protocol discovery
   if (m.topic && m.topic !== 'equity_prices' && m.topic !== 'market_prices') {
@@ -122,6 +88,25 @@ function handleMessage(raw: string): void {
     }
     return;
   }
+  // 2026-04-24: crypto_prices topic exists and streams e.g. xrpusdt @ ~6/sec.
+  // Store in same priceMap so getRtdsPrice('btcusdt') / getRtdsPrice('ethusdt') etc. works.
+  if (m.topic === 'crypto_prices' && m.type === 'update') {
+    const cp = m.payload;
+    if (!cp?.symbol || typeof cp.value !== 'number') return;
+    const symC = cp.symbol.toLowerCase();
+    priceMap.set(symC, {
+      symbol: symC,
+      value: cp.value,
+      timestamp: typeof cp.timestamp === 'number' ? cp.timestamp : Date.now(),
+      received_at: Date.now(),
+    });
+    if (!firstSeen.has(symC)) {
+      firstSeen.add(symC);
+      log.info({ symbol: symC, value: cp.value, total_symbols: firstSeen.size }, 'RTDS: new crypto symbol observed');
+    }
+    return;
+  }
+
   if (m.topic !== 'equity_prices' || m.type !== 'update') return;
   const p = m.payload;
   if (!p?.symbol || typeof p.value !== 'number') return;
@@ -159,7 +144,7 @@ function connect(): void {
       action: 'subscribe',
       subscriptions: [
         { topic: 'equity_prices', type: 'update' },
-        { topic: 'market_prices', type: 'price_change' },   // 2026-04-24 added for sub-second new-listing detection
+        { topic: 'crypto_prices', type: 'update' },   // 2026-04-24: real-time Polymarket crypto spot feed — replaces external Binance for oracle-lag checks
       ],
     };
     try {
