@@ -75,7 +75,7 @@ const MODEL = 'claude-haiku-4-5-20251001';
 const MAX_MARKETS_PER_CALL = 20;
 const MAX_TOKENS = 1200;                   // ~ 20 findings × 60 tokens each
 const REQUEST_TIMEOUT_MS = 30_000;
-const MIN_CALL_INTERVAL_MS = 10 * 60 * 1000; // 10 min between calls
+const MIN_CALL_INTERVAL_MS = 60 * 60 * 1000; // 2026-04-24 raised 10min->1h: burned $20 credit in 24h at 10min cadence, and scout has never been a documented winner. Keep observability but cut cost 6x.
 
 const MAX_CONVICTION = 0.80;
 const MIN_REASON_LENGTH = 20;
@@ -470,7 +470,7 @@ Evaluate each. Return findings JSON.`;
 
     // Log cache usage stats from the API response headers / usage field
     // so we can validate the cache is actually hitting. 2026-04-15:
-    // bumped debug → info. Fires once every 10 min (MIN_CALL_INTERVAL_MS)
+    // bumped debug → info. Fires once every 1h (MIN_CALL_INTERVAL_MS)
     // so log volume is trivial, but gives us proof the API is being
     // called and the cache is hitting (10× cost reduction depends on it).
     if (response.usage) {

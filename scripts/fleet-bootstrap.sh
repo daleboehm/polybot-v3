@@ -18,6 +18,25 @@
 
 set -euo pipefail
 
+# 2026-04-24 dual-mode: generate fresh keys (default) OR import from existing wallet JSONs
+IMPORT_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --import) IMPORT_DIR="$2"; shift 2 ;;
+    --help) echo "Usage: $0 [--import /path/to/wallets/]"; exit 0 ;;
+    *) echo "Unknown arg: $1"; exit 1 ;;
+  esac
+done
+
+if [ -n "$IMPORT_DIR" ]; then
+  [ -d "$IMPORT_DIR" ] || { echo "Import dir not found: $IMPORT_DIR"; exit 1; }
+  echo "Import mode: reading wallet JSONs from $IMPORT_DIR"
+  echo "  Expected filename pattern: wallet-<slug>.json with { address, private_key }"
+else
+  echo "Generate mode: will create fresh Polygon keypairs for each slug"
+fi
+
+
 SLUGS=(
   armorstack lilac caspian-intl
   armorstack-tax armorstack-marketing armorstack-te
@@ -44,11 +63,24 @@ for slug in "${SLUGS[@]}"; do
     continue
   fi
   plain="$TMP/wallet-${slug}.json"
-  node "$GEN_SCRIPT" --slug="$slug" > "$plain"
+
+  if [ -n "$IMPORT_DIR" ]; then
+    src="$IMPORT_DIR/wallet-${slug}.json"
+    if [ ! -f "$src" ]; then
+      echo "  [skip] $slug — no import file at $src"
+      continue
+    fi
+    cp "$src" "$plain"
+    mode=imported
+  else
+    node "$GEN_SCRIPT" --slug="$slug" > "$plain"
+    mode=generated
+  fi
+
   addr=$(node -e "console.log(require('$plain').address)")
   age -r "$AGE_PUB" -o "$enc" "$plain"
   shred -u "$plain"
-  echo "  [done] $slug -> $addr (encrypted to $enc)"
+  echo "  [done] $slug ($mode) -> $addr (encrypted to $enc)"
 done
 
 rm -rf "$TMP"

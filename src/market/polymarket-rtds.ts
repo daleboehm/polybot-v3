@@ -115,6 +115,13 @@ function handleMessage(raw: string): void {
     return;
   }
 
+  // 2026-04-24 diagnostic: log any unexpected topic we're receiving for protocol discovery
+  if (m.topic && m.topic !== 'equity_prices' && m.topic !== 'market_prices') {
+    if (Math.random() < 0.02) {  // 2% sample to avoid log flood
+      log.info({ topic: m.topic, type: m.type, payload_keys: m.payload ? Object.keys(m.payload).slice(0, 6) : [] }, 'RTDS: unknown topic observed (protocol discovery)');
+    }
+    return;
+  }
   if (m.topic !== 'equity_prices' || m.type !== 'update') return;
   const p = m.payload;
   if (!p?.symbol || typeof p.value !== 'number') return;
