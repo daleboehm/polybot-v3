@@ -23,7 +23,10 @@ entities:
       # 2026-04-23 PIVOT: R&D becomes a paper MONEY MAKER. Kill-list applied via
       # Kelly-sized triage on 14-day leaderboard (see ~/.claude/skills/polybot-pnl-triage).
       # Survivors (positive quarter-Kelly at 14d, n>=50):
-      - { strategy_id: favorites,          sub_strategy_ids: [compounding] }           # 64.9% WR, +$102 / 990
+      # 2026-04-24 KILLED favorites entirely — compounding decayed 64.6% -> 51.9% WR
+      # (n=27 recent) with negative avg PnL. stratified_bias + fan_fade killed earlier.
+      # Re-evaluate when we have a favorites sub with positive recent edge.
+      # - { strategy_id: favorites,          sub_strategy_ids: [compounding] }           # DISABLED 2026-04-24
       - { strategy_id: longshot,           sub_strategy_ids: [bucketed_fade, news_overreaction_fade] }   # 65.9%/74.4% WR, +$32 / +$89
       - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # small n winners; killed single_forecast (asymmetric payout)
       - negrisk_arbitrage                                                              # 96% WR, +$18 / 175 (tail-risk capped by max_position_usd)

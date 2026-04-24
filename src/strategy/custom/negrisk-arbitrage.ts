@@ -69,7 +69,7 @@ const DEFAULT_LEG_SIZE_USD = 4;
 // the basket math breaks when partial. Tails stay cheap enough that even
 // a partial basket is net-positive on accumulated tail wins across many
 // families. Full partial-basket diagnosis in docs/todo.md.
-const MAX_LEG_PRICE = 0.15;
+const MAX_LEG_PRICE = 0.30;  // 2026-04-24 raised 0.15->0.30. At 0.15 every eligible family was rejected (sum_yes passed, max_leg failed). Partial-basket bleed concern from n=74 data was under old 25%% strategy envelope — now 80%% so bleed risk much lower. Monitor.
 const DEDUP_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — don't re-stack same family
 
 export class NegRiskArbitrageStrategy extends BaseStrategy {
