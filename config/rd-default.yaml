@@ -23,6 +23,7 @@ risk:
   # preservation. Removing the 15% inherited-from-prod limit so long-dated
   # convergence positions don't crowd out new strategy signals.
   max_portfolio_exposure_pct: 1.0
+  max_strategy_envelope_pct: 0.80   # 2026-04-24 raised 0.25->0.80 on R&D: paper mode, 10 strategies × 80% ~= portfolio-bound by max_portfolio_exposure_pct=1.0 anyway. 25% was rejecting 187 signals in 15 min once any strategy hit .5K deployed.
   fractional_kelly: 0.25
   daily_loss_lockout_usd: 500.00   # High lockout — don't want R&D stopping itself
   stop_loss_pct: 0.20
