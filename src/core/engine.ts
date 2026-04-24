@@ -110,7 +110,7 @@ export class Engine {
   constructor(private config: AppConfig) {
     this.entityManager = new EntityManager(config);
     this.marketCache = new MarketCache();
-    this.samplingPoller = new SamplingPoller(config.api.clob_base_url, config.engine.scan_interval_ms);
+    this.samplingPoller = new SamplingPoller(config.api.clob_base_url, config.engine.sampling_poll_interval_ms ?? config.engine.scan_interval_ms);
     this.orderbookWs = new OrderbookWebSocket(config.api.ws_url);
     // Dale 2026-04-10: BOTH ENGINES LIVE. The old heuristic "no live entities =
     // R&D mode" no longer works because R&D now runs live capital too. The

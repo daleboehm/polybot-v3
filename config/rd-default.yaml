@@ -7,6 +7,7 @@ engine:
   # engines. R&D paper-sim uses book data for maker fill gating, and the
   # fast evaluator gives R&D the same 10-second BTC reaction as prod.
   orderbook_subscribe: true
+  sampling_poll_interval_ms: 20000    # 2026-04-24: 3x faster new-market discovery (60s -> 20s) — hits 15-min BTC markets before half-window gone
   max_concurrent_orders: 50        # 2026-04-23 Phase 1: raised from 20 to parallelize signal throughput
   log_level: info
 
@@ -28,11 +29,11 @@ risk:
   daily_loss_lockout_usd: 500.00   # High lockout — don't want R&D stopping itself
   stop_loss_pct: 0.20
   hard_stop_usd: 25.00
-  profit_target_pct: 0.40
+  profit_target_pct: 0.75             # 2026-04-24 raised 0.40->0.75 per audit: 0.40 caps longshot winners at ~7% of full-resolution potential. At 0.75 we still take profit but let news_overreaction_fade / bucketed_fade run toward their calibrated model prob
   # 2026-04-17: Lowered from 0.02 — R&D purpose is signal data collection.
   # High threshold was starving all strategies of data.
   min_edge_threshold: 0.005
-  min_hold_hours: 2
+  min_hold_hours: 0.5                  # 2026-04-24 lowered 2->0.5 per audit: only gates loss-stops, not wins. 2h was a ghost from pre-15-min-market era
   min_hours_to_resolve: 0.25       # 2026-04-23 Phase 1: lowered from 1h to unlock 15-min crypto/RTDS markets for scalping (Dale 2026-04-10: only short-horizon positions to keep the
   max_hours_to_resolve: 48         # wheels spinning. 1-48h window enforced in strategy-context.
   tiered_stops:

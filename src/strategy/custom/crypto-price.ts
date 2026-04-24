@@ -74,7 +74,11 @@ export class CryptoPriceStrategy extends BaseStrategy {
       this.isSubStrategyEnabled(ctx, 'volatility_premium_fade') ||
       this.isSubStrategyEnabled(ctx, 'ta_momentum');
     if (!anyEnabled) return signals;
-    const markets = ctx.getActiveMarkets();
+    // 2026-04-24: crypto markets get their own time-window override.
+    // Global min_hours_to_resolve=0.25 (15 min) excludes 5-min BTC up/down
+    // markets — but those have the most Chainlink-latency-arb edge per
+    // @usePolyArb. Use 0.08h (5 min) to 12h window for crypto_price specifically.
+    const markets = ctx.getActiveMarketsInWindow(0.08, 12);
     const now = Date.now();
     const existingPositions = new Set(
       ctx.getOpenPositions(ctx.entity.config.slug).map(p => p.condition_id)

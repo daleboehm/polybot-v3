@@ -64,6 +64,7 @@ const riskLimitsSchema = z.object({
 
 const engineConfigSchema = z.object({
   scan_interval_ms: z.number().positive().default(300_000),
+  sampling_poll_interval_ms: z.number().positive().default(60_000),   // 2026-04-24: separate from scan interval so we can discover new markets fast (20s on R&D) while keeping heavier scan cycle longer
   snapshot_interval_ms: z.number().positive().default(3_600_000),
   risk_check_interval_ms: z.number().positive().default(60_000),
   orderbook_subscribe: z.boolean().default(true),

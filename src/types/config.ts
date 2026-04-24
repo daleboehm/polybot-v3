@@ -6,6 +6,7 @@ import type { AdvisorConfig } from './advisor.js';
 
 export interface EngineConfig {
   scan_interval_ms: number;
+  sampling_poll_interval_ms?: number;   // optional override; falls back to scan_interval_ms
   snapshot_interval_ms: number;
   risk_check_interval_ms: number;
   orderbook_subscribe: boolean;
