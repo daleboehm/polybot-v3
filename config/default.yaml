@@ -116,7 +116,7 @@ database:
 # Check interval set to 5 min to match the scan cycle. This way R&D's most
 # recent resolutions propagate to prod before prod's next scan fires.
 advisor:
-  enabled: true
+  enabled: false  # 2026-04-25 DISABLED: advisor was auto-resurrecting favorites strategy from R&D stats, contributed to $200 Prod loss
   rd_database_path: /opt/polybot-v3-rd/data/rd.db
   check_interval_ms: 300000         # 5 minutes (was 30 min default)
   target_entity_slug: polybot
@@ -149,7 +149,7 @@ advisor:
 # normal scan cycle. Harmless to leave enabled on engines where no scouts
 # are running (finds an empty table, does nothing).
 priority_scanner:
-  enabled: true
+  enabled: false  # 2026-04-25 DISABLED: advisor was auto-resurrecting favorites strategy from R&D stats, contributed to $200 Prod loss
   interval_ms: 30000              # 30 seconds
   max_priorities_per_run: 25
   min_scan_gap_ms: 60000          # don't re-scan the same priority row more than 1x/min
@@ -162,7 +162,7 @@ priority_scanner:
 # Add scout ids to `disabled_scouts` to kill specific scouts without
 # touching code.
 scouts:
-  enabled: true
+  enabled: false  # 2026-04-25 DISABLED: advisor was auto-resurrecting favorites strategy from R&D stats, contributed to $200 Prod loss
   interval_ms: 60000              # 60 seconds between ticks
   # 2026-04-16: llm-news-scout PARKED on both engines. See rd-default.yaml
   # for full diagnosis notes. Short version: Haiku returns {"findings": []}
