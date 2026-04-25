@@ -176,6 +176,31 @@ export class OnChainReconciler {
       const api = apiByAsset.get(dbPos.token_id);
 
       if (!api) {
+        // GRACE WINDOW (2026-04-25 fix for Prod $200 loss): the Polymarket
+        // Data API indexer can lag 2-15 min behind on-chain settlement.
+        // For positions opened <10 min ago, treat "absent from API" as
+        // "indexer not caught up yet" rather than "position is dead".
+        // Without this guard the reconciler flips fresh BUYs to
+        // status=resolved, the strategy gate sees an empty position list
+        // next cycle, and re-buys the same market 4-8 times until the
+        // API finally indexes it. That race burned ~$98 in spread/slippage
+        // on 67 redundant fills across 17 markets in 18 minutes.
+        const openedAtMs = new Date(dbPos.opened_at).getTime();
+        const ageMs = Date.now() - openedAtMs;
+        if (Number.isFinite(ageMs) && ageMs < 600_000) {
+          log.info(
+            {
+              entity: entitySlug,
+              condition: dbPos.condition_id.substring(0, 16),
+              age_seconds: Math.round(ageMs / 1000),
+            },
+            "keep_open (grace window: position younger than 10min, API indexer lag)",
+          );
+          result.actions.push({ kind: "keep_open", dbPosition: dbPos });
+          apiByAsset.delete(dbPos.token_id);
+          continue;
+        }
+
         // Position is NOT in the active set on-chain. Two sub-cases:
         //   (1) DEAD — it's in the redeemable/zero-value bucket. This is
         //       the happy path after the Phase -1 fix: the Data API tells
