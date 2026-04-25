@@ -56,7 +56,10 @@ entities:
     # All sub-strategies gated via polybot-pnl-triage quarter-Kelly verdict over 14d.
     strategies:
       # Survivors (positive quarter-Kelly, n>=50 on R&D):
-      - { strategy_id: favorites,          sub_strategy_ids: [compounding, near_snipe] }  # fan_fade KILLED (-$52 / 22% WR on R&D)
+      # 2026-04-25 KILLED favorites — mirrored R&D Friday decision. compounding edge decayed
+      # 64.6% -> 51.9% WR on n=27 recent. fan_fade and stratified_bias already killed.
+      # Re-evaluate when we have a favorites sub with positive recent edge.
+      # - { strategy_id: favorites,          sub_strategy_ids: [compounding, near_snipe] }  # DISABLED 2026-04-25
       - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }  # RE-ENABLED with safe subs; systematic_fade stays killed (-$22 / 32% WR)
       - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # single_forecast KILLED (-$18 PnL despite 76.5% WR — payout asymmetry 4:1)
       - { strategy_id: negrisk_arbitrage,  sub_strategy_ids: [buy_the_set] }  # ADDED (missing from Prod): 96% WR, f_q=0.16, tail-risk capped by max_position_usd

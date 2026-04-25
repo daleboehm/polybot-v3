@@ -1,8 +1,9 @@
 engine:
-  scan_interval_ms: 300000        # 5 minutes
+  scan_interval_ms: 120000        # 2026-04-25 sync R&D — same edge logic, faster needed for 15-min markets
   snapshot_interval_ms: 3600000   # 1 hour
   risk_check_interval_ms: 60000   # 1 minute
   orderbook_subscribe: true
+  sampling_poll_interval_ms: 20000   # 2026-04-25 sync R&D — 3x faster new-listing discovery
   max_concurrent_orders: 5
   log_level: info
 
@@ -36,7 +37,7 @@ risk:
   daily_loss_lockout_usd: 10.00   # 2026-04-23 tightened from 15 per polybot-unhalt-gate Gate 5 (2.7% of $374 bankroll)
   stop_loss_pct: 0.20
   hard_stop_usd: 5.00
-  profit_target_pct: 0.40
+  profit_target_pct: 0.60          # 2026-04-25 raised 0.40->0.60 — 0.40 was capping longshot winners at 7%% of resolution potential. 0.60 is partial sync of R&D 0.75 — Prod still conservative
   max_strategy_envelope_pct: 0.25 # RE-ENABLED for recap (was 0.0 sprint)
   max_cluster_pct: 0.15           # RE-ENABLED for recap (was 0.0 sprint)
   # G2 (2026-04-15): portfolio-wide total-exposure cap — orthogonal to
@@ -50,7 +51,7 @@ risk:
   # Dale's directive: "only limit is cash, no reserve." Trading balance == cash.
   # When reserves come back, it'll be via the central-node sweep pattern.
   min_edge_threshold: 0.015       # 1.5% minimum edge (was 0.02 marathon)
-  min_hold_hours: 6
+  min_hold_hours: 0.5              # 2026-04-25 fix ghost: 6h was incompatible with 15-min/1h markets, blocking stop-loss exits structurally
   # Dale 2026-04-10: prod must NOT buy anything that resolves past 48 hours.
   # "I need to keep the capital moving." Enforced by strategy-context.ts
   # getActiveMarkets() — strategies don't even see markets outside this window,
