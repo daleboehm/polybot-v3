@@ -46,7 +46,7 @@ show() {
 }
 
 [ "$mode" = "prod" -o "$mode" = "both" ] && show "PROD"  "$PROD_DB" "polybot"
-[ "$mode" = "rd"   -o "$mode" = "both" ] && show "R&D"   "$RD_DB"   "rd"
+[ "$mode" = "rd"   -o "$mode" = "both" ] && show "R&D"   "$RD_DB"   "rd-engine"
 echo "==================================================================="
 TZ=America/Chicago date "+ Snapshot %Y-%m-%d %H:%M:%S %Z"
 echo "==================================================================="
