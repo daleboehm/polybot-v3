@@ -73,9 +73,8 @@ export class ComplementStrategy extends BaseStrategy {
       // Must exceed fee drag (~2% taker each side = ~4% round trip, but we only buy)
       if (profitPct < CONFIG.min_profit_pct) continue;
 
-      // Generate signal for the YES side (we buy both, but signal the primary)
-      // The engine will size based on the YES side; we note the complement in metadata
-      const signal: Signal = {
+      // YES leg — buy YES side of the arb
+      const yesSignal: Signal = {
         signal_id: nanoid(),
         entity_slug: ctx.entity.config.slug,
         strategy_id: this.id,
@@ -84,9 +83,9 @@ export class ComplementStrategy extends BaseStrategy {
         token_id: market.token_yes_id,
         side: 'BUY',
         outcome: 'YES',
-        strength: Math.min(1, profitPct * 10), // Higher profit = stronger signal
+        strength: Math.min(1, profitPct * 10),
         edge: profitPct,
-        model_prob: 0.95, // High confidence — this is mathematical arb
+        model_prob: 0.95,
         market_price: yesPrice,
         recommended_size_usd: 10,
         metadata: {
@@ -97,13 +96,40 @@ export class ComplementStrategy extends BaseStrategy {
           combined: Math.round(combined * 10000) / 10000,
           profit_pct: Math.round(profitPct * 10000) / 10000,
           arb_type: 'complement',
-          // Note: ideally we'd also buy NO side simultaneously
-          // For v2.0 we signal YES; the NO side arb is a future enhancement
+          arb_leg: 'YES',
         },
         created_at: new Date(),
       };
 
-      signals.push(signal);
+      // NO leg — mandatory second leg; without it this is directional, not arb
+      const noSignal: Signal = {
+        signal_id: nanoid(),
+        entity_slug: ctx.entity.config.slug,
+        strategy_id: this.id,
+        sub_strategy_id: 'intra_market_arb',
+        condition_id: market.condition_id,
+        token_id: market.token_no_id,
+        side: 'BUY',
+        outcome: 'NO',
+        strength: Math.min(1, profitPct * 10),
+        edge: profitPct,
+        model_prob: 0.95,
+        market_price: noPrice,
+        recommended_size_usd: 10,
+        metadata: {
+          question: market.question,
+          market_slug: market.market_slug,
+          yes_price: yesPrice,
+          no_price: noPrice,
+          combined: Math.round(combined * 10000) / 10000,
+          profit_pct: Math.round(profitPct * 10000) / 10000,
+          arb_type: 'complement',
+          arb_leg: 'NO',
+        },
+        created_at: new Date(),
+      };
+
+      signals.push(yesSignal, noSignal);
       this.recentTrades.set(market.condition_id, now);
 
       log.info({
@@ -112,7 +138,8 @@ export class ComplementStrategy extends BaseStrategy {
         no: noPrice,
         combined: combined.toFixed(4),
         profit: (profitPct * 100).toFixed(2) + '%',
-      }, 'Complement arb signal');
+        legs: 2,
+      }, 'Complement arb signal — both legs');
     }
 
     if (signals.length > 0) {

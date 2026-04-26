@@ -82,9 +82,16 @@ entities:
     port: 8081
     entity_path: /opt/polybot-v3/paper-entities/armorstack
     mode: paper
-    status: pending
-    starting_capital: 0
-    strategies: []
+    status: active
+    starting_capital: 500.00
+    # Shadow wallet: mirrors Prod risk-cleared strategies on paper to benchmark
+    # parallel performance tracking. Activated 2026-04-26.
+    strategies:
+      - { strategy_id: complement,       sub_strategy_ids: [intra_market_arb] }
+      - { strategy_id: weather_forecast, sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }
+      - { strategy_id: longshot,         sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }
+      - negrisk_arbitrage
+      - crypto_price
 
   - slug: lilac
     name: "GC Lilac Ventures"
