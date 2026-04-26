@@ -123,18 +123,22 @@ export class ClobRouter {
     }
 
     // Fee model: Polymarket taker fees (live since 2026-03-30).
-    // Formula: fee_per_share = feeRate × price × (1 − price).
-    // The CLOB API's `taker_base_fee` field is the feeRate coefficient (NOT a
-    // pre-computed fee). For markets where the API returns 0 or the market object
-    // is unavailable, fee = 0 (conservative — we'd rather under-charge in paper
-    // than repeat the $51K fee bug from 2026-04-10).
-    // The fee is applied to share count, not notional USDC.
-    const feeRate = market?.taker_fee ?? 0;
+    // Formula: fee = shares × feeRate × price × (1 − price).
+    // For V2 exchanges: query the CLOB market API for a fresh feeRate before
+    // each live order — V2 fee rates can vary by market category and update
+    // dynamically. For V1 or on error, fall back to the cached taker_fee.
+    const cachedFeeRate = market?.taker_fee ?? 0;
+    let liveFeeRate = cachedFeeRate;
+    if (this.exchangeVersion === 'v2') {
+      try {
+        liveFeeRate = await client.fetchLiveFeeRate(order.condition_id);
+      } catch {
+        liveFeeRate = cachedFeeRate; // graceful fallback
+      }
+    }
     const usdcSize = roundTo(order.price * order.size, 4);
-    // fee = shares × feeRate × price × (1-price), but we cap at the raw API
-    // value if it looks like a coefficient (< 0.1). If it's a large integer
-    // (the old scaling bug), clamp to 0 for safety.
-    const safeFeeRate = feeRate > 0.5 ? 0 : feeRate;
+    // Guard against old scaled-integer bug (value > 0.5 is not a coefficient).
+    const safeFeeRate = liveFeeRate > 0.5 ? 0 : liveFeeRate;
     const feeUsdc = roundTo(order.size * safeFeeRate * order.price * (1 - order.price), 4);
     const netUsdc = order.side === 'BUY'
       ? roundTo(usdcSize + feeUsdc, 4)  // buying costs more
@@ -297,5 +301,25 @@ class ClobClientWrapper {
       log.error({ err: msg }, 'CLOB order failed');
       return { success: false, error: msg };
     }
+  }
+
+  /**
+   * Fetch fresh taker fee rate for a market from the CLOB API.
+   * Used for V2 live orders where fee rates can vary per market category.
+   * Returns the feeRate coefficient (e.g. 0.02 for 2% category).
+   * Throws on network/parse errors — caller should fallback to cached value.
+   */
+  async fetchLiveFeeRate(conditionId: string): Promise<number> {
+    const url = `${this.host}/markets/${conditionId}`;
+    const resp = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) throw new Error(`CLOB market API HTTP ${resp.status}`);
+    const data = await resp.json() as Record<string, unknown>;
+    const raw = Number(data.taker_base_fee ?? data.takerBaseFee ?? 0);
+    // Sanity check: must be a coefficient [0, 0.5)
+    if (raw > 0.5) throw new Error(`Suspicious feeRate value: ${raw}`);
+    return raw;
   }
 }

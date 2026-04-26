@@ -10,10 +10,14 @@ import { createChildLogger } from '../../core/logger.js';
 const log = createChildLogger('strategy:complement');
 
 const CONFIG = {
-  max_combined: 0.96,      // Buy both sides when YES + NO < this
+  // Threshold tightened 0.96→0.95 for V2 fee safety.
+  // Fee drag: both YES + NO legs each pay feeRate×p×(1-p).
+  // At p=0.5, fee = 2 × 0.02 × 0.25 = 1% on the combined purchase.
+  // $0.95 combined → gross profit $0.05 → net profit after ~$0.01 fee = $0.04 = 4.2%.
+  max_combined: 0.95,
   min_side_price: 0.01,    // Both sides must have meaningful price
   max_side_price: 0.99,    // Neither side near $1
-  min_profit_pct: 0.02,    // Minimum 2% profit after fees (taker ~2%)
+  min_profit_pct: 0.02,    // Minimum 2% profit after fees (taker ~2% per leg)
   dedup_minutes: 240,      // Don't re-arb same market within 4 hours
 };
 
@@ -21,7 +25,7 @@ export class ComplementStrategy extends BaseStrategy {
   readonly id = 'complement';
   readonly name = 'Complement Arbitrage';
   readonly description = 'Buy both YES and NO when combined price < $0.96 for guaranteed profit';
-  readonly version = '3.0.0';
+  readonly version = '3.1.0';
 
   private recentTrades = new Map<string, number>();
 
