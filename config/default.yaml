@@ -148,6 +148,7 @@ advisor:
     - weather_forecast.single_forecast  # killed 04-23: payout asymmetry 4:1
     - convergence             # all subs: -$17 long_term_grind + correlated positions
     - sportsbook_fade         # all subs: Odds API not producing sports edge
+    - negrisk_arbitrage       # killed 04-26: non-exhaustive families bleeding cash, MIN_SUM_YES loosened to 0.82 exposes none-of-above gap
   thresholds:
     min_resolutions_to_enable: 10
     min_win_rate_to_enable: 50
