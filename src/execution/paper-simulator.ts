@@ -1,6 +1,7 @@
 // Paper trading simulator — realistic fills with slippage model
 
 import type { Order, OrderFill, Outcome } from '../types/index.js';
+import { getDatabase } from '../storage/database.js';
 import type { MarketCache } from '../market/market-cache.js';
 import { applySlippage, roundTo } from '../utils/math.js';
 import { nanoid } from 'nanoid';
@@ -14,6 +15,39 @@ export class PaperSimulator {
     private slippageBps: number,
     private fillDelayMs: number,
   ) {}
+
+  /**
+   * Returns ticks-per-minute for a given token over the last 60 seconds.
+   * Used to estimate fill competition pressure on taker orders.
+   * Falls back to 0 if market_ticks table doesn't exist yet (pre-recorder).
+   */
+  private getTickVelocity(tokenId: string): number {
+    try {
+      const db = getDatabase();
+      const result = db.prepare(
+        `SELECT COUNT(*) as cnt FROM market_ticks
+         WHERE token_id = ? AND received_ms > ?`
+      ).get(tokenId, Date.now() - 60_000) as { cnt: number } | undefined;
+      return result?.cnt ?? 0;
+    } catch {
+      return 0; // market_ticks not yet populated
+    }
+  }
+
+  /**
+   * Competition penalty: [0, 0.80] based on taker tick velocity.
+   * 0-2 tpm  → 0% penalty (quiet market, full fill rate)
+   * 10 tpm   → ~30% penalty
+   * 50 tpm   → ~70% penalty
+   * 100+ tpm → 80% max penalty (very active market, most takers miss)
+   */
+  private competitionPenalty(ticksPerMin: number): number {
+    if (ticksPerMin <= 2) return 0;
+    const MAX_PENALTY = 0.80;
+    // Saturating function: penalty = MAX * (1 - e^(-k * tpm))
+    const k = 0.03;
+    return MAX_PENALTY * (1 - Math.exp(-k * ticksPerMin));
+  }
 
   async simulateFill(order: Order): Promise<OrderFill | null> {
     if (!order.is_paper) {
@@ -66,6 +100,21 @@ export class PaperSimulator {
           );
           return null;
         }
+      }
+    }
+
+    // Taker competition gate: for taker/unspecified orders in active markets,
+    // apply a probabilistic fill rate based on tick velocity.
+    // Maker orders already have real fill-rate discipline via orderbook crossing above.
+    if (order.execution_mode !== 'maker') {
+      const tpm = this.getTickVelocity(order.token_id);
+      const penalty = this.competitionPenalty(tpm);
+      if (penalty > 0 && Math.random() < penalty) {
+        log.debug(
+          { order_id: order.order_id, token_id: order.token_id, tpm, penalty: (penalty * 100).toFixed(0) + '%' },
+          'Taker fill missed — competition penalty',
+        );
+        return null;
       }
     }
 
