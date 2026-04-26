@@ -68,6 +68,7 @@ entities:
       - cross_market
       - macro_forecast
       - whale_copy
+      - complement  # 2026-04-26: intra-market YES+NO arb, zero directional risk
       # STILL DISABLED:
       # - convergence (long_term_grind: -$17 / 44% WR on R&D)
       # - sportsbook_fade (all subs: negative edge, Odds API not producing sports edge)
