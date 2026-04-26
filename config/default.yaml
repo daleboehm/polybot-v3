@@ -137,6 +137,17 @@ advisor:
     - weather_forecast
     - crypto_price
     - longshot.bucketed_fade
+  # Strategies explicitly killed in prod — advisor CANNOT auto-resurrect these.
+  # Add here whenever a strategy is manually removed from entities.yaml.
+  # Root cause of 2026-04-25 $200 loss: favorites.compounding was re-enabled
+  # by advisor despite being manually killed; scouts were disabled as band-aid.
+  # This list is the permanent fix.
+  never_enable_strategies:
+    - favorites               # all subs killed 04-25: edge decayed, removed from prod
+    - longshot.systematic_fade  # killed 04-23: -$22 / 32% WR
+    - weather_forecast.single_forecast  # killed 04-23: payout asymmetry 4:1
+    - convergence             # all subs: -$17 long_term_grind + correlated positions
+    - sportsbook_fade         # all subs: Odds API not producing sports edge
   thresholds:
     min_resolutions_to_enable: 10
     min_win_rate_to_enable: 50
@@ -149,7 +160,7 @@ advisor:
 # normal scan cycle. Harmless to leave enabled on engines where no scouts
 # are running (finds an empty table, does nothing).
 priority_scanner:
-  enabled: false  # 2026-04-25 DISABLED: advisor was auto-resurrecting favorites strategy from R&D stats, contributed to $200 Prod loss
+  enabled: true   # 2026-04-26 RE-ENABLED: advisor resurrection fixed
   interval_ms: 30000              # 30 seconds
   max_priorities_per_run: 25
   min_scan_gap_ms: 60000          # don't re-scan the same priority row more than 1x/min
@@ -162,7 +173,7 @@ priority_scanner:
 # Add scout ids to `disabled_scouts` to kill specific scouts without
 # touching code.
 scouts:
-  enabled: false  # 2026-04-25 DISABLED: advisor was auto-resurrecting favorites strategy from R&D stats, contributed to $200 Prod loss
+  enabled: true   # 2026-04-26 RE-ENABLED: advisor resurrection fixed via never_enable_strategies list
   interval_ms: 60000              # 60 seconds between ticks
   # 2026-04-16: llm-news-scout PARKED on both engines. See rd-default.yaml
   # for full diagnosis notes. Short version: Haiku returns {"findings": []}

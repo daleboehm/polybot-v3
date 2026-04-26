@@ -118,6 +118,7 @@ const advisorConfigSchema = z.object({
   check_interval_ms: z.number().positive().default(1_800_000),
   target_entity_slug: z.string().default('polybot'),
   protected_strategies: z.array(z.string()).default([]),
+  never_enable_strategies: z.array(z.string()).default([]),
   thresholds: advisorThresholdsSchema.default({}),
 });
 

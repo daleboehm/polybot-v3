@@ -6,6 +6,9 @@ export interface AdvisorConfig {
   check_interval_ms: number;
   target_entity_slug: string;
   protected_strategies: string[];
+  /** Strategies that are NEVER auto-enabled, even if R&D stats validate them.
+   *  Permanently overrides advisor enable gate for manually-killed strategies. */
+  never_enable_strategies: string[];
   thresholds: AdvisorThresholds;
 }
 

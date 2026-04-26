@@ -193,7 +193,15 @@ export class StrategyAdvisor {
         // R2 PR#2: Wilson LB-gated ENABLE. Requires statistical significance
         // (n ≥ 50, Wilson LB ≥ 0.50) AND practical significance (P&L > $5).
         const wilsonLB = wilsonLowerBound(rd.wins, rd.total_resolutions);
-        if (
+        // Never-enable check: if strategy was manually killed in prod, skip auto-enable.
+        const isNeverEnable =
+          this.config.never_enable_strategies.includes(pair.strategy_id) ||
+          (pair.sub_strategy_id &&
+            this.config.never_enable_strategies.includes(`${pair.strategy_id}.${pair.sub_strategy_id}`));
+
+        if (isNeverEnable) {
+          reason = `Never-enable: manually killed in prod — advisor cannot resurrect`;
+        } else if (
           rd.total_resolutions >= MIN_N_ENABLE &&
           wilsonLB >= MIN_WILSON_LB_ENABLE &&
           rd.total_pnl > MIN_PNL_ENABLE
