@@ -25,7 +25,7 @@ export class ComplementStrategy extends BaseStrategy {
   readonly id = 'complement';
   readonly name = 'Complement Arbitrage';
   readonly description = 'Buy both YES and NO when combined price < $0.96 for guaranteed profit';
-  readonly version = '3.1.0';
+  readonly version = '3.2.0';
 
   private recentTrades = new Map<string, number>();
 
@@ -101,6 +101,9 @@ export class ComplementStrategy extends BaseStrategy {
           profit_pct: Math.round(profitPct * 10000) / 10000,
           arb_type: 'complement',
           arb_leg: 'YES',
+          pair_id: market.condition_id,          // links YES+NO for orphan detection
+          submission_ts: now,                    // latency logging anchor
+          spread_at_submission: combined,        // for post-mortem fill analysis
         },
         created_at: new Date(),
       };
@@ -129,6 +132,9 @@ export class ComplementStrategy extends BaseStrategy {
           profit_pct: Math.round(profitPct * 10000) / 10000,
           arb_type: 'complement',
           arb_leg: 'NO',
+          pair_id: market.condition_id,          // links YES+NO for orphan detection
+          submission_ts: now,                    // latency logging anchor
+          spread_at_submission: combined,        // for post-mortem fill analysis
         },
         created_at: new Date(),
       };

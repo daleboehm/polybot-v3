@@ -27,6 +27,7 @@ import type { MarketCache } from '../market/market-cache.js';
 import type { MarketData } from '../types/index.js';
 import { insertPriority } from '../storage/repositories/market-priority-repo.js';
 import { createChildLogger } from '../core/logger.js';
+import { getDatabase } from '../storage/database.js';
 
 const log = createChildLogger('scout:kl-divergence');
 
@@ -49,6 +50,12 @@ const PRIORITY_TTL_MS = 10 * 60 * 1000;
 // Rate limit: don't re-flag the same cluster more than once per N ms.
 const FLAG_RATE_LIMIT_MS = 5 * 60 * 1000;
 
+// Tick velocity gates — filter stale markets and mid-reprice news events.
+// Min: must have >= 2 ticks in last 60s (market is actively quoted)
+// Max: skip if > 25 ticks/min (rapid reprice cascade = news event in flight)
+const MIN_TICKS_60S = 2;
+const MAX_TICKS_60S = 25;
+
 export class KLDivergenceScout extends ScoutBase {
   readonly id = 'kl-divergence-scout';
   readonly description = 'Detect mispricing in neg-risk market clusters via sum-of-YES deviation and KL-divergence';
@@ -58,6 +65,25 @@ export class KLDivergenceScout extends ScoutBase {
   constructor() {
     super();
     this.log = createChildLogger(`scout:${this.id}`);
+  }
+
+  /** Returns tick count for a condition in the given window. Falls back to 0 if table missing. */
+  private getConditionTickCount(conditionId: string, windowMs: number): number {
+    try {
+      const db = getDatabase();
+      const result = db.prepare(
+        'SELECT COUNT(*) as cnt FROM market_ticks WHERE condition_id = ? AND received_ms > ?'
+      ).get(conditionId, Date.now() - windowMs) as { cnt: number } | undefined;
+      return result?.cnt ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Returns true if the market has healthy tick activity (not stale, not mid-reprice). */
+  private isTickRateHealthy(conditionId: string): boolean {
+    const ticks = this.getConditionTickCount(conditionId, 60_000);
+    return ticks >= MIN_TICKS_60S && ticks <= MAX_TICKS_60S;
   }
 
   run(marketCache: MarketCache): ScoutRunResult {
@@ -106,6 +132,10 @@ export class KLDivergenceScout extends ScoutBase {
         if (p <= 0) continue;
         kl += p * Math.log(p / qVal);
       }
+
+      // Tick-rate gate: skip clusters that are stale OR mid-reprice.
+      // Check the first leg; if it's unhealthy the whole cluster is suspect.
+      if (!this.isTickRateHealthy(legs[0].condition_id)) continue;
 
       const didFlag =
         (sumDeviation >= SUM_DEVIATION_MIN && sumDeviation <= SUM_DEVIATION_MAX) ||
