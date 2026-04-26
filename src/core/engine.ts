@@ -40,6 +40,7 @@ import { WhaleFadeStrategy } from '../strategy/custom/whale-fade.js';
 import { RtdsForecastStrategy } from '../strategy/custom/rtds-forecast.js';
 import { MakerRebateStrategy } from '../strategy/custom/maker-rebate.js';
 import { NegRiskArbitrageStrategy } from '../strategy/custom/negrisk-arbitrage.js';
+import { ComplementStrategy } from '../strategy/custom/complement.js';
 import { WhaleEventSubscriber } from '../market/whale-event-subscriber.js';
 import { FastCryptoEvaluator } from './fast-crypto-evaluator.js';
 import { OddsApiClient } from '../market/odds-api-client.js';
@@ -169,6 +170,7 @@ export class Engine {
     // no margin after slippage). Per-leg size is intentionally small ($4) —
     // the alpha is the basket-level risk-free payoff, not per-leg edge.
     this.strategyRegistry.register(new NegRiskArbitrageStrategy());
+    this.strategyRegistry.register(new ComplementStrategy()); // 2026-04-26: intra-market YES+NO arb
 
     // Strategy advisor (must be after strategyRegistry is populated)
     this.strategyAdvisor = new StrategyAdvisor(config.advisor, this.entityManager, this.strategyRegistry);

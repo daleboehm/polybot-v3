@@ -8,6 +8,7 @@ import { nanoid } from 'nanoid';
 import { createChildLogger } from '../../core/logger.js';
 import { getNWSForecast, getEnsembleSpread, getMETARObservation, getHRRRForecast } from '../../market/data-feeds.js';
 import { getFeeRateFromTags, feeAdjustedEdge } from '../../utils/math.js';
+import { getDatabase } from '../../storage/database.js';
 
 const log = createChildLogger('strategy:weather');
 
@@ -32,6 +33,7 @@ const CITY_COORDS: Record<string, [number, number]> = {
   'seoul': [37.5665, 126.9780], 'beijing': [39.9042, 116.4074],
   'ankara': [39.9334, 32.8597], 'milan': [45.4642, 9.1900],
   'wuhan': [30.5928, 114.3055], 'athens': [37.9838, 23.7275],
+  'chengdu': [30.5728, 104.0668],
 };
 
 // Celsius city names (non-US cities typically use Celsius on Polymarket)
@@ -83,6 +85,9 @@ export class WeatherForecastStrategy extends BaseStrategy {
   readonly version = '3.0.0';
 
   private forecastCache = new Map<string, ForecastData>();
+  // calibration cache — refreshed every 30 min from weather_calibrations table (Python sidecar)
+  private calibrationCache = new Map<string, { final_prob: number; emos_mu_c: number; emos_sigma_c: number; history_days: number }>();
+  private calibrationCacheTime = 0;
   private recentTrades = new Map<string, number>();
 
   override getSubStrategies(): string[] {
@@ -98,6 +103,27 @@ export class WeatherForecastStrategy extends BaseStrategy {
     ];
   }
 
+  private refreshCalibrations(): void {
+    if (Date.now() - this.calibrationCacheTime < 30 * 60 * 1000) return;
+    try {
+      const db = getDatabase();
+      const rows = db.prepare().all() as Array<{ condition_id: string; final_prob: number; emos_mu_c: number; emos_sigma_c: number; history_days: number }>;
+      this.calibrationCache.clear();
+      for (const row of rows) {
+        this.calibrationCache.set(row.condition_id, {
+          final_prob: row.final_prob,
+          emos_mu_c: row.emos_mu_c,
+          emos_sigma_c: row.emos_sigma_c,
+          history_days: row.history_days,
+        });
+      }
+      this.calibrationCacheTime = Date.now();
+      if (rows.length > 0) log.info({ count: rows.length }, 'Weather calibrations loaded from DB');
+    } catch (err) {
+      log.debug({ err }, 'Calibration read failed — using raw scoring');
+    }
+  }
+
   async evaluate(ctx: StrategyContext): Promise<Signal[]> {
     const signals: Signal[] = [];
     // At least one weather sub must be enabled — cheap short-circuit.
@@ -107,6 +133,7 @@ export class WeatherForecastStrategy extends BaseStrategy {
       this.isSubStrategyEnabled(ctx, 'next_day_horizon') ||
       this.isSubStrategyEnabled(ctx, 'ensemble_spread_fade');
     if (!anyEnabled) return signals;
+    this.refreshCalibrations();
     const markets = ctx.getActiveMarkets();
     const now = Date.now();
     const existingPositions = new Set(
@@ -235,6 +262,15 @@ export class WeatherForecastStrategy extends BaseStrategy {
         hold_to_settlement: holdToSettlement,
       };
 
+      // L1-L6 calibration override
+      const _cal = this.calibrationCache.get(market.condition_id);
+      if (_cal && _cal.history_days >= 7) {
+        const _rawP = score.yesProbability;
+        score.yesProbability = _cal.final_prob;
+        score.edge = score.yesProbability - market.yes_price;
+        log.debug({ city: parsed.city, raw: _rawP.toFixed(3), cal: _cal.final_prob.toFixed(3), days: _cal.history_days }, 'L1-L6 override');
+      }
+
       // ─── sub: single_forecast (baseline: 2-48h, score≥35, edge≥5%) ───
       // Dynamic score threshold when ensemble is wide (low confidence).
       let singleMinScore = CONFIG.min_score;
@@ -248,6 +284,12 @@ export class WeatherForecastStrategy extends BaseStrategy {
         score.total >= singleMinScore &&
         adjEdge >= CONFIG.min_edge
       ) {
+        const _cal = this.calibrationCache.get(market.condition_id);
+        if (_cal && _cal.history_days >= 7) {
+          // Override with calibrated probability from L1-L6 Python sidecar
+          yesProbability = scoredSide === 'YES' ? _cal.final_prob : (1 - _cal.final_prob);
+          log.debug({ city: parsed.city, raw: score.yesProbability.toFixed(3), cal: _cal.final_prob.toFixed(3), layers: _cal.history_days }, 'Calibration applied');
+        }
         signals.push({
           signal_id: nanoid(),
           entity_slug: ctx.entity.config.slug,
