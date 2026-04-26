@@ -107,7 +107,9 @@ export class WeatherForecastStrategy extends BaseStrategy {
     if (Date.now() - this.calibrationCacheTime < 30 * 60 * 1000) return;
     try {
       const db = getDatabase();
-      const rows = db.prepare().all() as Array<{ condition_id: string; final_prob: number; emos_mu_c: number; emos_sigma_c: number; history_days: number }>;
+      const rows = db.prepare(
+        "SELECT condition_id, final_prob, emos_mu_c, emos_sigma_c, history_days FROM weather_calibrations WHERE calibrated_at > datetime('now', '-8 hours')"
+      ).all() as Array<{ condition_id: string; final_prob: number; emos_mu_c: number; emos_sigma_c: number; history_days: number }>;
       this.calibrationCache.clear();
       for (const row of rows) {
         this.calibrationCache.set(row.condition_id, {
@@ -284,12 +286,6 @@ export class WeatherForecastStrategy extends BaseStrategy {
         score.total >= singleMinScore &&
         adjEdge >= CONFIG.min_edge
       ) {
-        const _cal = this.calibrationCache.get(market.condition_id);
-        if (_cal && _cal.history_days >= 7) {
-          // Override with calibrated probability from L1-L6 Python sidecar
-          yesProbability = scoredSide === 'YES' ? _cal.final_prob : (1 - _cal.final_prob);
-          log.debug({ city: parsed.city, raw: score.yesProbability.toFixed(3), cal: _cal.final_prob.toFixed(3), layers: _cal.history_days }, 'Calibration applied');
-        }
         signals.push({
           signal_id: nanoid(),
           entity_slug: ctx.entity.config.slug,
