@@ -61,7 +61,7 @@ entities:
       # Re-evaluate when we have a favorites sub with positive recent edge.
       # - { strategy_id: favorites,          sub_strategy_ids: [compounding, near_snipe] }  # DISABLED 2026-04-25
       - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }  # RE-ENABLED with safe subs; systematic_fade stays killed (-$22 / 32% WR)
-      - { strategy_id: weather_forecast,   sub_strategy_ids: [next_day_horizon]  # ensemble_spread_fade KILLED 2026-04-27 }  # single_forecast KILLED (-$18 PnL despite 76.5% WR — payout asymmetry 4:1)
+      - { strategy_id: weather_forecast,   sub_strategy_ids: [next_day_horizon] }  # ensemble_spread_fade KILLED 2026-04-27; single_forecast KILLED 04-23 payout asymmetry
       # negrisk_arbitrage REMOVED 04-26: non-exhaustive family bleeds cash (also in never_enable_strategies)
       # Kept as whole strategies (no sub-strategy triage yet):
       - crypto_price
@@ -88,7 +88,7 @@ entities:
     # parallel performance tracking. Activated 2026-04-26.
     strategies:
       - { strategy_id: complement,       sub_strategy_ids: [intra_market_arb] }
-      - { strategy_id: weather_forecast, sub_strategy_ids: [next_day_horizon]  # ensemble_spread_fade KILLED 2026-04-27 }
+      - { strategy_id: weather_forecast, sub_strategy_ids: [next_day_horizon] }  # ensemble_spread_fade KILLED 2026-04-27
       - { strategy_id: longshot,         sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }
       - crypto_price  # negrisk_arbitrage REMOVED 2026-04-27: killed on prod 04-26, removing from paper to keep data clean
 
