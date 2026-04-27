@@ -62,7 +62,7 @@ entities:
       # - { strategy_id: favorites,          sub_strategy_ids: [compounding, near_snipe] }  # DISABLED 2026-04-25
       - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }  # RE-ENABLED with safe subs; systematic_fade stays killed (-$22 / 32% WR)
       - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # single_forecast KILLED (-$18 PnL despite 76.5% WR — payout asymmetry 4:1)
-      - { strategy_id: negrisk_arbitrage,  sub_strategy_ids: [buy_the_set] }  # ADDED (missing from Prod): 96% WR, f_q=0.16, tail-risk capped by max_position_usd
+      # negrisk_arbitrage REMOVED 04-26: non-exhaustive family bleeds cash (also in never_enable_strategies)
       # Kept as whole strategies (no sub-strategy triage yet):
       - crypto_price
       - cross_market

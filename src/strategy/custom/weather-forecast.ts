@@ -166,6 +166,11 @@ export class WeatherForecastStrategy extends BaseStrategy {
       const parsed = this.parseWeatherQuestion(market.question);
       if (!parsed) continue;
 
+      // Claim market BEFORE any async yield to prevent concurrent evaluate()
+      // calls from both passing the dedup check (race condition: both see
+      // recentTrades empty, both await getForecast, both produce signals).
+      this.recentTrades.set(market.condition_id, now);
+
       // Fetch forecast from Open-Meteo (primary)
       const forecast = await this.getForecast(parsed.city);
       if (!forecast) continue;
