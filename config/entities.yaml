@@ -90,8 +90,7 @@ entities:
       - { strategy_id: complement,       sub_strategy_ids: [intra_market_arb] }
       - { strategy_id: weather_forecast, sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }
       - { strategy_id: longshot,         sub_strategy_ids: [news_overreaction_fade, bucketed_fade] }
-      - negrisk_arbitrage
-      - crypto_price
+      - crypto_price  # negrisk_arbitrage REMOVED 2026-04-27: killed on prod 04-26, removing from paper to keep data clean
 
   - slug: lilac
     name: "GC Lilac Ventures"

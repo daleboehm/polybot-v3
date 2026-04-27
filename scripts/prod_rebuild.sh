@@ -39,7 +39,7 @@ echo "Prod: $(systemctl is-active polybot-v3)"
 
 # Verify cash not overwritten
 CASH=$(sqlite3 data/polybot.db "SELECT current_cash FROM entities WHERE slug = 'polybot';")
-echo "Prod cash after restart: $CASH (should be 153.87)"
+echo "Prod cash after restart: $CASH (check DB for actual value)"
 
 echo ""
 echo "=== COPY FRESH DIST TO R&D ==="

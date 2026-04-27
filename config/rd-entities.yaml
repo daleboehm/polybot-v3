@@ -29,7 +29,7 @@ entities:
       # - { strategy_id: favorites,          sub_strategy_ids: [compounding] }           # DISABLED 2026-04-24
       - { strategy_id: longshot,           sub_strategy_ids: [bucketed_fade, news_overreaction_fade] }   # 65.9%/74.4% WR, +$32 / +$89
       - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # small n winners; killed single_forecast (asymmetric payout)
-      - negrisk_arbitrage                                                              # 96% WR, +$18 / 175 (tail-risk capped by max_position_usd)
+      # negrisk_arbitrage REMOVED 2026-04-27
       # Tiny-n strategies kept for data collection (insufficient sample, do not kill):
       - crypto_price
       - whale_fade
