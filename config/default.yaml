@@ -165,6 +165,7 @@ advisor:
     - convergence             # all subs: -$17 long_term_grind + correlated positions
     - sportsbook_fade         # all subs: Odds API not producing sports edge
     - negrisk_arbitrage       # killed 04-26: non-exhaustive families bleeding cash, MIN_SUM_YES loosened to 0.82 exposes none-of-above gap
+    - weather_forecast.ensemble_spread_fade  # killed 04-27: R&D 3.2% WR / -7 on 31 resolutions. Most entries push (cost back), but directional outcomes lose heavily
   thresholds:
     min_resolutions_to_enable: 10
     min_win_rate_to_enable: 50
