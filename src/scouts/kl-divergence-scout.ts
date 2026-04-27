@@ -67,15 +67,27 @@ export class KLDivergenceScout extends ScoutBase {
     this.log = createChildLogger(`scout:${this.id}`);
   }
 
+  // F6 FIX: prepared statement cached at instance level rather than re-compiled
+  // on every call. better-sqlite3 docs recommend preparing once and reusing.
+  // Lazily initialised on first use so construction doesn't throw on missing table.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _tickCountStmt: any = null; // cached better-sqlite3 Statement
+
   /** Returns tick count for a condition in the given window. Falls back to 0 if table missing. */
   private getConditionTickCount(conditionId: string, windowMs: number): number {
     try {
       const db = getDatabase();
-      const result = db.prepare(
-        'SELECT COUNT(*) as cnt FROM market_ticks WHERE condition_id = ? AND received_ms > ?'
-      ).get(conditionId, Date.now() - windowMs) as { cnt: number } | undefined;
+      if (!this._tickCountStmt) {
+        this._tickCountStmt = db.prepare(
+          'SELECT COUNT(*) as cnt FROM market_ticks WHERE condition_id = ? AND received_ms > ?'
+        );
+      }
+      const result = this._tickCountStmt.get(conditionId, Date.now() - windowMs) as { cnt: number } | undefined;
       return result?.cnt ?? 0;
-    } catch {
+    } catch (err) {
+      // F8 FIX: log WARN so DB infrastructure failures are visible, not silently swallowed.
+      log.warn({ err, conditionId }, 'tick count query failed — gate defaults to stale (conservative)');
+      this._tickCountStmt = null; // reset so next call re-prepares after transient failure
       return 0;
     }
   }
@@ -84,6 +96,15 @@ export class KLDivergenceScout extends ScoutBase {
   private isTickRateHealthy(conditionId: string): boolean {
     const ticks = this.getConditionTickCount(conditionId, 60_000);
     return ticks >= MIN_TICKS_60S && ticks <= MAX_TICKS_60S;
+  }
+
+  // F7 FIX: check tick health across the cluster, not just first leg.
+  // Array ordering is arbitrary — checking only legs[0] gave false negatives
+  // (stale first leg → entire cluster skipped) and false positives
+  // (active first leg → stale cluster passed). Require ≥50% of legs healthy.
+  private isClusterTickRateHealthy(legs: MarketData[]): boolean {
+    const healthyCount = legs.filter(m => this.isTickRateHealthy(m.condition_id)).length;
+    return healthyCount >= Math.ceil(legs.length * 0.5);
   }
 
   run(marketCache: MarketCache): ScoutRunResult {
@@ -134,8 +155,8 @@ export class KLDivergenceScout extends ScoutBase {
       }
 
       // Tick-rate gate: skip clusters that are stale OR mid-reprice.
-      // Check the first leg; if it's unhealthy the whole cluster is suspect.
-      if (!this.isTickRateHealthy(legs[0].condition_id)) continue;
+      // F7 FIX: require ≥50% of legs healthy (not just the arbitrary first leg).
+      if (!this.isClusterTickRateHealthy(legs)) continue;
 
       const didFlag =
         (sumDeviation >= SUM_DEVIATION_MIN && sumDeviation <= SUM_DEVIATION_MAX) ||

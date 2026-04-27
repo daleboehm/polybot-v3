@@ -101,8 +101,8 @@ export class ComplementStrategy extends BaseStrategy {
           profit_pct: Math.round(profitPct * 10000) / 10000,
           arb_type: 'complement',
           arb_leg: 'YES',
-          pair_id: market.condition_id,          // links YES+NO for orphan detection
-          submission_ts: now,                    // latency logging anchor
+          pair_id: market.condition_id,          // links YES+NO of SAME condition (intentionally identical on both legs — not a cross-market link)
+          submission_ts: now,                    // signal generation time (not fill time) — latency reference anchor only
           spread_at_submission: combined,        // for post-mortem fill analysis
         },
         created_at: new Date(),
@@ -132,8 +132,8 @@ export class ComplementStrategy extends BaseStrategy {
           profit_pct: Math.round(profitPct * 10000) / 10000,
           arb_type: 'complement',
           arb_leg: 'NO',
-          pair_id: market.condition_id,          // links YES+NO for orphan detection
-          submission_ts: now,                    // latency logging anchor
+          pair_id: market.condition_id,          // links YES+NO of SAME condition (intentionally identical on both legs — not a cross-market link)
+          submission_ts: now,                    // signal generation time (not fill time) — latency reference anchor only
           spread_at_submission: combined,        // for post-mortem fill analysis
         },
         created_at: new Date(),

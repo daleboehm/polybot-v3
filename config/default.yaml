@@ -137,6 +137,22 @@ advisor:
     - weather_forecast
     - crypto_price
     - longshot.bucketed_fade
+  # ═══════════════════════════════════════════════════════════════════
+  # DUAL-CONFIG KILL GATE — READ BEFORE TOUCHING THIS LIST (F11 fix)
+  # ═══════════════════════════════════════════════════════════════════
+  # Killing a strategy REQUIRES TWO STEPS. Doing only one causes live
+  # trades to continue (as happened with negrisk on 04-26, +$15 loss).
+  #
+  #   STEP 1 — entities.yaml: remove the strategy from the entity's
+  #            strategies list. THIS stops the engine from running it.
+  #
+  #   STEP 2 — here (default.yaml): add to never_enable_strategies.
+  #            THIS stops the advisor from re-adding it.
+  #
+  #   entities.yaml = what the engine runs RIGHT NOW
+  #   never_enable_strategies = what the advisor cannot resurrect
+  #   These are separate gates. Both must be updated to fully kill.
+  # ═══════════════════════════════════════════════════════════════════
   # Strategies explicitly killed in prod — advisor CANNOT auto-resurrect these.
   # Add here whenever a strategy is manually removed from entities.yaml.
   # Root cause of 2026-04-25 $200 loss: favorites.compounding was re-enabled

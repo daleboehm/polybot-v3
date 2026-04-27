@@ -89,6 +89,31 @@ export class WeatherForecastStrategy extends BaseStrategy {
   private calibrationCache = new Map<string, { final_prob: number; emos_mu_c: number; emos_sigma_c: number; history_days: number }>();
   private calibrationCacheTime = 0;
   private recentTrades = new Map<string, number>();
+  // F13: tracks whether we loaded the dedup window from DB after restart.
+  private _recentTradesLoaded = false;
+
+  /** Populate recentTrades from DB on first evaluate() call after startup. */
+  private loadRecentTradesFromDb(entitySlug: string): void {
+    if (this._recentTradesLoaded) return;
+    this._recentTradesLoaded = true;
+    try {
+      const db = getDatabase();
+      const rows = db.prepare(
+        `SELECT condition_id, CAST(strftime('%s', MAX(created_at)) AS INTEGER) * 1000 AS last_ts
+         FROM trades
+         WHERE entity_slug = ? AND strategy_id = ?
+           AND created_at > datetime('now', '-' || ? || ' minutes')
+         GROUP BY condition_id`
+      ).all(entitySlug, this.id, CONFIG.dedup_minutes) as Array<{ condition_id: string; last_ts: number }>;
+      const cutoff = Date.now() - CONFIG.dedup_minutes * 60 * 1000;
+      for (const row of rows) {
+        if (row.last_ts > cutoff) this.recentTrades.set(row.condition_id, row.last_ts);
+      }
+      log.info({ count: rows.length, entity: entitySlug }, 'weather-forecast: recentTrades restored from DB after restart');
+    } catch (err) {
+      log.warn({ err }, 'weather-forecast: failed to restore recentTrades from DB — empty cache on restart');
+    }
+  }
 
   override getSubStrategies(): string[] {
     // 2026-04-10 expansion: added same_day_snipe, next_day_horizon,
@@ -127,6 +152,9 @@ export class WeatherForecastStrategy extends BaseStrategy {
   }
 
   async evaluate(ctx: StrategyContext): Promise<Signal[]> {
+    // F13: restore dedup cache from DB on first call after restart
+    this.loadRecentTradesFromDb(ctx.entity.config.slug);
+
     const signals: Signal[] = [];
     // At least one weather sub must be enabled — cheap short-circuit.
     const anyEnabled =
@@ -173,7 +201,13 @@ export class WeatherForecastStrategy extends BaseStrategy {
 
       // Fetch forecast from Open-Meteo (primary)
       const forecast = await this.getForecast(parsed.city);
-      if (!forecast) continue;
+      if (!forecast) {
+        // F12 FIX: release the dedup claim on fetch failure so a transient
+        // Open-Meteo outage does not lock the market out for 240 minutes.
+        // Back-date so retry is allowed after 5 minutes.
+        this.recentTrades.set(market.condition_id, now - (CONFIG.dedup_minutes - 5) * 60 * 1000);
+        continue;
+      }
 
       // Enhance with NWS data for US cities (more authoritative)
       const nws = await getNWSForecast(parsed.city);
