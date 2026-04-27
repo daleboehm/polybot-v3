@@ -28,7 +28,7 @@ entities:
       # Re-evaluate when we have a favorites sub with positive recent edge.
       - { strategy_id: favorites,            sub_strategy_ids: [compounding] }           # RE-ENABLED 2026-04-27: 7d +$245.49 / 67.8% WR — strongest current edge
       - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade] }  # bucketed_fade KILLED 2026-04-27: 90% WR but -$80 Kelly collapse (wins tiny, losses large)
-      - { strategy_id: weather_forecast,   sub_strategy_ids: [next_day_horizon] }  # ensemble_spread_fade KILLED 2026-04-27: 0% WR / -$104; single_forecast killed 04-23 payout asymmetry
+      - { strategy_id: weather_forecast,   sub_strategy_ids: [next_day_horizon] }  # ensemble_spread_fade KILLED 2026-04-27: 0% WR / -$104; single_forecast STAYS KILLED: $117 blowup 52min on 04-26
       # negrisk_arbitrage REMOVED 2026-04-27
       # Tiny-n strategies kept for data collection (insufficient sample, do not kill):
       - crypto_price
