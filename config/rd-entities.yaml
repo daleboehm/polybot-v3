@@ -26,9 +26,9 @@ entities:
       # 2026-04-24 KILLED favorites entirely — compounding decayed 64.6% -> 51.9% WR
       # (n=27 recent) with negative avg PnL. stratified_bias + fan_fade killed earlier.
       # Re-evaluate when we have a favorites sub with positive recent edge.
-      # - { strategy_id: favorites,          sub_strategy_ids: [compounding] }           # DISABLED 2026-04-24
-      - { strategy_id: longshot,           sub_strategy_ids: [bucketed_fade, news_overreaction_fade] }   # 65.9%/74.4% WR, +$32 / +$89
-      - { strategy_id: weather_forecast,   sub_strategy_ids: [ensemble_spread_fade, next_day_horizon] }  # small n winners; killed single_forecast (asymmetric payout)
+      - { strategy_id: favorites,            sub_strategy_ids: [compounding] }           # RE-ENABLED 2026-04-27: 7d +$245.49 / 67.8% WR — strongest current edge
+      - { strategy_id: longshot,           sub_strategy_ids: [news_overreaction_fade] }  # bucketed_fade KILLED 2026-04-27: 90% WR but -$80 Kelly collapse (wins tiny, losses large)
+      - { strategy_id: weather_forecast,   sub_strategy_ids: [next_day_horizon] }  # ensemble_spread_fade KILLED 2026-04-27: 0% WR / -$104; single_forecast killed 04-23 payout asymmetry
       # negrisk_arbitrage REMOVED 2026-04-27
       # Tiny-n strategies kept for data collection (insufficient sample, do not kill):
       - crypto_price
